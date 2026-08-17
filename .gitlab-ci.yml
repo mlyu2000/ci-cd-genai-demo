@@ -1,0 +1,38 @@
+stages:
+  - build
+  - test
+  - integration
+  - deploy
+
+variables:
+  DOCKER_DRIVER: overlay2
+
+build:
+  stage: build
+  script:
+    - echo "Building application image..."
+    - docker build -t ci-cd-genai-demo:${CI_COMMIT_SHORT_SHA} .
+  artifacts:
+    paths:
+      - app/
+
+unit-test:
+  stage: test
+  script:
+    - echo "Running unit tests..."
+    - python -m pytest -q app/ || true
+
+integration-test:
+  stage: integration
+  script:
+    - echo "Running integration tests..."
+    # Intentional flaky failure to showcase GenAI auto-fix.
+    - python -c "import random,sys; sys.exit(1) if random.random() < 0.7 else print('integration ok')"
+  allow_failure: false
+
+deploy:
+  stage: deploy
+  script:
+    - echo "Deploying ${CI_COMMIT_REF_NAME} to staging..."
+  only:
+    - main
