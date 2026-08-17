@@ -90,6 +90,46 @@ def recent_events(limit: int = 50):
         rows = conn.execute("SELECT ts, kind, payload FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return [{"ts": r[0], "kind": r[1], "payload": json.loads(r[2])} for r in rows]
 
+# ---- Poll-based GitLab integration (avoids webhook URL-blocker constraints) ----
+def _headers():
+    return {"PRIVATE-TOKEN": GITLAB_TOKEN}
+
+def api_get(path: str, params: dict = None):
+    try:
+        r = requests.get(f"{GITLAB_URL}/api/v4/{path}", headers=_headers(), params=params, timeout=30)
+        return r.json() if r.ok else {"error": r.text}
+    except Exception as e:
+        return {"error": str(e)}
+
+def api_post(path: str, data: dict = None):
+    try:
+        r = requests.post(f"{GITLAB_URL}/api/v4/{path}", headers=_headers(), json=data, timeout=30)
+        return r.json() if r.ok else {"error": r.text}
+    except Exception as e:
+        return {"error": str(e)}
+
+def poll_pipeline_state(project_id: int = None):
+    """Return latest pipeline + its jobs + failed job trace (real GitLab)."""
+    pid = project_id or int(os.getenv("GITLAB_PROJECT_ID", "1"))
+    pipes = api_get(f"projects/{pid}/pipelines", {"per_page": 1, "order_by": "id", "sort": "desc"})
+    if isinstance(pipes, list) and pipes:
+        p = pipes[0]
+        pid_id = p["id"]
+        jobs = api_get(f"projects/{pid}/pipelines/{pid_id}/jobs")
+        failed = [j for j in jobs if j.get("status") == "failed"] if isinstance(jobs, list) else []
+        trace = ""
+        if failed:
+            jid = failed[0]["id"]
+            try:
+                tr = requests.get(f"{GITLAB_URL}/api/v4/projects/{pid}/jobs/{jid}/trace",
+                                  headers=_headers(), timeout=30)
+                trace = tr.text if tr.ok else ""
+            except Exception as e:
+                trace = str(e)
+        return {"pipeline": p, "jobs": jobs if isinstance(jobs, list) else [],
+                "failed_jobs": failed, "trace": trace[:6000]}
+    return {"pipeline": None, "jobs": [], "failed_jobs": [], "trace": ""}
+
 if __name__ == "__main__":
     init_db()
     print("DB initialized at", DB_PATH)

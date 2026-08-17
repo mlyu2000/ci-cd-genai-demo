@@ -109,7 +109,12 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
       <div class="stage"><div class="dot err" id="dot-int"></div><div><strong>Integration Tests</strong> <span id="int-status">Failed</span></div></div>
     </div>
 
-    <div class="ai-card" id="ai-card" style="display:none">
+    <div class="actions" style="margin-top:12px">
+      <button class="btn" onclick="runPipeline()">▶ Run Pipeline</button>
+      <button class="btn secondary" onclick="startPolling()">↻ Refresh</button>
+    </div>
+
+      <div class="ai-card" id="ai-card" style="display:none">
       <h4>🤖 AI Root-Cause & Auto-Fix</h4>
       <div id="ai-reason" style="white-space:pre-wrap"></div>
       <div style="margin:10px 0">
@@ -163,15 +168,34 @@ fetch('/api/git').then(r=>r.json()).then(g=>{
   document.getElementById('g-time').textContent=g.commit_time||'-';
   document.getElementById('g-files').innerHTML=(g.files_changed||[]).map(f=>'<div class="source-item">• '+f+'</div>').join('');
 });
+startPolling();
 
-// SSE
-const es=new EventSource('/stream');
-es.onmessage=ev=>{
-  const d=JSON.parse(ev.data);
-  if(d.type==='job' && d.status==='failed'){ runAI(d); }
-  if(d.type==='pipeline' && d.status==='success'){ document.getElementById('dot-int').className='dot ok'; document.getElementById('int-status').textContent='Passed'; document.getElementById('kpi-rate').textContent='100%'; }
-  streamEvent(d);
-};
+// Poll GitLab pipeline state (real, avoids webhook URL-blocker)
+let pollTimer=null;
+function pollState(){
+  fetch('/api/poll').then(r=>r.json()).then(s=>{
+    const p=s.pipeline||{};
+    document.getElementById('ref').textContent=p.ref||'-';
+    document.getElementById('pid').textContent=p.id||'-';
+    // stage dots
+    const js=s.jobs||[];
+    const byName=n=>js.filter(j=>j.name===n)[0];
+    const setDot=(id,st)=>{const e=document.getElementById(id); if(!e)return; e.className='dot '+(st==='success'?'ok':st==='failed'?'err':st==='running'?'run':'');};
+    setDot('dot-build', (byName('build')||{}).status);
+    setDot('dot-test', (byName('unit-test')||{}).status);
+    const intj=byName('integration-test')||{};
+    setDot('dot-int', intj.status);
+    document.getElementById('int-status').textContent=intj.status?intj.status.toUpperCase():'-';
+    if(intj.status==='failed'){ lastTrace=s.trace||''; runAI({name:'integration-test'}); }
+    if(p.status==='success'){ document.getElementById('kpi-rate').textContent='100%'; }
+    streamEvent({type:'poll',pipeline:p.status,jobs:js.length});
+  });
+}
+function runPipeline(){
+  fetch('/api/trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:'master'})})
+    .then(r=>r.json()).then(x=>{ log('Pipeline triggered: '+JSON.stringify(x).slice(0,200)); startPolling(); });
+}
+function startPolling(){ if(pollTimer)clearInterval(pollTimer); pollTimer=setInterval(pollState,4000); pollState(); }
 function runAI(job){
   document.getElementById('ai-card').style.display='block';
   document.getElementById('ai-reason').textContent='Analyzing failure...';
@@ -187,6 +211,7 @@ function runAI(job){
      window._analysis=a;
    });
 }
+
 function approveFix(){
   fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({analysis:window._analysis})}).then(r=>r.json()).then(x=>{
@@ -203,9 +228,23 @@ function rejectFix(){document.getElementById('ai-card').style.display='none';}
 def index():
     return render_template_string(HTML)
 
-@app.route("/api/config")
-def config():
-    return jsonify({"llm_endpoint": LLM_ENDPOINT, "llm_api_key_set": bool(LLM_API_KEY)})
+@app.route("/api/trigger", methods=["POST"])
+def trigger():
+    """Trigger a new pipeline on the GitLab project (real)."""
+    project_id = int(os.getenv("GITLAB_PROJECT_ID", "1"))
+    ref = request.get_json(force=True, silent=True) or {}
+    branch = ref.get("ref", "master")
+    res = webhook.api_post(f"projects/{project_id}/pipeline", {"ref": branch})
+    webhook.emit({"type": "pipeline_triggered", "ref": branch, "ts": time.time()})
+    return jsonify(res)
+
+@app.route("/api/poll")
+def poll():
+    """Poll latest GitLab pipeline + failed job trace."""
+    project_id = int(os.getenv("GITLAB_PROJECT_ID", "1"))
+    state = webhook.poll_pipeline_state(project_id)
+    return jsonify(state)
+
 
 @app.route("/api/git")
 def git_api():

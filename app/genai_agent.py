@@ -6,6 +6,7 @@ import requests
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://127.0.0.1:18080/v1")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-or-v1-default")
 LLM_MODEL = os.getenv("LLM_MODEL", "muse-glimmer-30b")
+SSL_CA_CERT = os.getenv("SSL_CA_CERT", "") or os.getenv("REQUESTS_CA_BUNDLE", "")
 
 SYSTEM_PROMPT = (
     "You are a senior CI/CD reliability engineer and GenAI auto-fix agent. "
@@ -40,7 +41,7 @@ def analyze_failure(job_trace: str, changed_files: list[str], commit_msg: str = 
     }
     headers = {"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"}
     try:
-        r = requests.post(f"{LLM_ENDPOINT}/chat/completions", json=payload, headers=headers, timeout=120)
+        r = requests.post(f"{LLM_ENDPOINT}/chat/completions", json=payload, headers=headers, timeout=120, verify=SSL_CA_CERT or True)
         r.raise_for_status()
         content = r.json()["choices"][0]["message"]["content"]
         return json.loads(content)

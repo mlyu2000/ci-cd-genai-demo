@@ -5,16 +5,50 @@ services:
     hostname: gitlab.local
     environment:
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://localhost:8929'
+        external_url 'http://localhost:18929'
         gitlab_rails['smtp_enable'] = false
+        gitlab_rails['allow_local_requests_from_web_hooks_and_services'] = true
+        gitlab_rails['webhook_timeout'] = 30
     ports:
-      - '8929:80'
-      - '8443:443'
+      - '18929:18929'
+      - '18443:443'
     volumes:
       - gitlab_config:/etc/gitlab
       - gitlab_logs:/var/log/gitlab
       - gitlab_data:/var/opt/gitlab
+    networks:
+      demo-net:
+        aliases:
+          - gitlab.demo
     restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ci-cd-genai-demo
+    environment:
+      LLM_ENDPOINT: ${LLM_ENDPOINT}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      SSL_CA_CERT: /ca/cs1-ca-bundle.pem
+      REQUESTS_CA_BUNDLE: /ca/cs1-ca-bundle.pem
+      FLASK_PORT: "18080"
+      GITLAB_MODE: real
+      GITLAB_URL: http://gitlab.demo:18929
+      GITLAB_TOKEN: ${GITLAB_TOKEN}
+      GITLAB_PROJECT_ID: "1"
+      WEBHOOK_SECRET: demo-secret
+    ports:
+      - '18080:18080'
+    volumes:
+      - /home/ml/.hermes/cs1-ca-bundle.pem:/ca/cs1-ca-bundle.pem:ro
+    networks:
+      demo-net:
+        aliases:
+          - genai-demo-app.com
+    depends_on:
+      - gitlab
 
   runner:
     image: gitlab/gitlab-runner:latest
@@ -22,6 +56,8 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - runner_config:/etc/gitlab-runner
+    networks:
+      - demo-net
     restart: unless-stopped
     depends_on:
       - gitlab
@@ -31,3 +67,7 @@ volumes:
   gitlab_logs:
   gitlab_data:
   runner_config:
+
+networks:
+  demo-net:
+    driver: bridge
