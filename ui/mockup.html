@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CI/CD GenAI Demo - Executive Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root { --bg:#0b1220; --card:#111a2e; --muted:#8aa0c2; --accent:#4da3ff; --ok:#2ecc71; --warn:#f1c40f; --err:#e74c3c; --text:#e6eefc; }
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
+header{padding:16px 24px;border-bottom:1px solid #1e2a45;display:flex;justify-content:space-between;align-items:center}
+nav a{color:var(--muted);margin:0 12px;text-decoration:none}
+nav a.active{color:var(--text)}
+.hero{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:24px}
+.card{background:var(--card);border:1px solid #1e2a45;border-radius:12px;padding:16px}
+.kpi{font-size:28px;font-weight:600}
+.kpi-label{color:var(--muted);font-size:12px;margin-top:4px}
+.main{display:grid;grid-template-columns:2fr 1fr;gap:16px;padding:0 24px 24px}
+.timeline{border-left:2px solid #1e2a45;padding-left:16px}
+.stage{display:flex;gap:12px;margin:12px 0}
+.dot{width:12px;height:12px;border-radius:50%;margin-top:4px}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
+.badge{padding:2px 8px;border-radius:6px;font-size:11px;background:#1e2a45;color:var(--muted)}
+.failure{margin-top:16px}
+.ai-summary{background:#0f1730;border:1px dashed #2a3a5e;border-radius:10px;padding:12px;margin:12px 0}
+.actions{display:flex;gap:8px;margin-top:12px}
+.btn{background:var(--accent);border:none;color:white;padding:8px 12px;border-radius:8px;cursor:pointer}
+.btn.secondary{background:#1e2a45;color:var(--text)}
+.feed{font-size:13px}
+.feed-item{padding:10px;border-bottom:1px solid #1e2a45}
+footer{padding:20px;color:var(--muted);text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <div><strong>CI/CD GenAI</strong> <span style="color:var(--muted)">Demo</span></div>
+  <nav>
+    <a class="active" href="#">Pipeline</a>
+    <a href="#">Insights</a>
+    <a href="#">Agents</a>
+    <a href="#">Governance</a>
+  </nav>
+</header>
+
+<div class="hero">
+  <div class="card">
+    <div class="kpi">4 min</div>
+    <div class="kpi-label">MTTR • ↓ 82%</div>
+  </div>
+  <div class="card">
+    <div class="kpi">12</div>
+    <div class="kpi-label">Releases / week ↑ 40%</div>
+  </div>
+  <div class="card">
+    <div class="kpi">87%</div>
+    <div class="kpi-label">Auto-Fix Rate</div>
+  </div>
+  <div class="card">
+    <div class="kpi">Low</div>
+    <div class="kpi-label">Risk Score</div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="card">
+    <h3 style="margin-top:0">Pipeline • main #1423</h3>
+    <div class="timeline">
+      <div class="stage"><div class="dot ok"></div><div><strong>Build</strong> 2m 14s <span class="badge">Passed</span></div></div>
+      <div class="stage"><div class="dot ok"></div><div><strong>Unit Tests</strong> 4m 01s <span class="badge">Passed</span></div></div>
+      <div class="stage"><div class="dot err"></div><div><strong>Integration Tests</strong> 6m 42s <span class="badge">Failed</span></div></div>
+      <div class="stage"><div class="dot warn"></div><div><strong>Validation</strong> Pending</div></div>
+    </div>
+
+    <div class="failure">
+      <h4>AI Root Cause Summary</h4>
+      <div class="ai-summary">
+        <b>Issue:</b> Flaky DB connection timeout in <code>payments.test</code><br>
+        <b>Evidence:</b> 3/10 runs timeout at 30s, logs show pool exhaustion after deploy v1.42<br>
+        <b>Suggested Fix:</b> Increase pool max from 10→20 and add retry with backoff. Auto-generated patch ready.
+      </div>
+      <div class="actions">
+        <button class="btn">Approve Auto-Fix</button>
+        <button class="btn secondary">View Patch</button>
+        <button class="btn secondary">Request Review</button>
+      </div>
+      <p style="color:var(--muted);font-size:12px">Confidence 92% • Citations: logs #1423, commit a9f3c2</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">AI Insights Feed</h3>
+    <div class="feed">
+      <div class="feed-item"><b>Self-healing test</b> updated <code>login.spec.js</code> selector<br><span style="color:var(--muted)">2 min ago</span></div>
+      <div class="feed-item"><b>Risk alert</b> unchanged schema in <code>orders</code> table<br><span style="color:var(--muted)">5 min ago</span></div>
+      <div class="feed-item"><b>Executive summary</b> generated for weekly release<br><span style="color:var(--muted)">1 hour ago</span></div>
+    </div>
+  </div>
+</div>
+
+<footer>Demo UI • Generative AI for CI/CD test & validation • Built for business & executive wow moment</footer>
+</body>
+</html>
