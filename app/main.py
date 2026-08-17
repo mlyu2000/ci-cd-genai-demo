@@ -1,6 +1,9 @@
 import os
 from flask import Flask, render_template_string, jsonify
 from dotenv import load_dotenv
+import git
+import subprocess
+from datetime import datetime
 
 load_dotenv()
 
@@ -9,6 +12,31 @@ app = Flask(__name__)
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://127.0.0.1:18080/v1")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-or-v1-default")
 FLASK_PORT = int(os.getenv("FLASK_PORT", "8080"))
+
+REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+def get_git_info():
+    try:
+        repo = git.Repo(REPO_PATH)
+        commit = repo.head.commit
+        commit_hash = commit.hexsha[:8]
+        commit_msg = commit.message.split("\n")[0]
+        commit_time = datetime.fromtimestamp(commit.committed_date).isoformat()
+        author = f"{commit.author.name} <{commit.author.email}>"
+        files_changed = [item.a_path for item in repo.index.diff(commit.parents[0] if commit.parents else None)]
+        if not files_changed:
+            # uncommitted changes
+            files_changed = [item.a_path for item in repo.index.diff(None)]
+        return {
+            "branch": repo.active_branch.name,
+            "commit_hash": commit_hash,
+            "commit_msg": commit_msg,
+            "commit_time": commit_time,
+            "author": author,
+            "files_changed": files_changed[:10]
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -28,16 +56,23 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 .kpi{font-size:28px;font-weight:600}
 .kpi-label{color:var(--muted);font-size:12px;margin-top:4px}
 .main{display:grid;grid-template-columns:2fr 1fr;gap:16px;padding:0 24px 24px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .timeline{border-left:2px solid #1e2a45;padding-left:16px}
 .stage{display:flex;gap:12px;margin:12px 0}
 .dot{width:12px;height:12px;border-radius:50%;margin-top:4px}
-.dot.ok{background:var(--ok)} .dot.err{background:var(--err)}
+.dot.ok{background:var(--ok)} .dot.err{background:var(--err)} .dot.warn{background:var(--warn)}
 .badge{padding:2px 8px;border-radius:6px;font-size:11px;background:#1e2a45;color:var(--muted)}
 .ai-summary{background:#0f1730;border:1px dashed #2a3a5e;border-radius:10px;padding:12px;margin:12px 0}
 .actions{display:flex;gap:8px;margin-top:12px}
 .btn{background:var(--accent);border:none;color:white;padding:8px 12px;border-radius:8px;cursor:pointer}
 .btn.secondary{background:#1e2a45;color:var(--text)}
 .config{padding:24px;color:var(--muted);font-size:13px}
+.source-list{font-size:12px;color:var(--muted);margin-top:8px}
+.source-item{padding:4px 0;border-bottom:1px solid #1e2a45}
+.debug-console{margin-top:16px}
+.debug-header{display:flex;justify-content:space-between;align-items:center}
+.debug-content{max-height:200px;overflow:auto;background:#0a0f1a;border:1px solid #1e2a45;border-radius:8px;padding:8px;font-family:monospace;font-size:12px;color:#c5d0e0}
+.collapsed .debug-content{display:none}
 </style>
 </head>
 <body>
@@ -64,12 +99,37 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
       <button class="btn">Approve Auto-Fix</button>
       <button class="btn secondary">View Patch</button>
     </div>
+    <div class="debug-console" id="debug">
+      <div class="debug-header">
+        <strong>Debug Console</strong>
+        <button class="btn secondary" onclick="toggleDebug()">Toggle</button>
+      </div>
+      <div class="debug-content">
+        {{debug_log}}
+      </div>
+    </div>
   </div>
   <div class="card">
-    <h3>LLM Config</h3>
+    <h3>Source & Commit</h3>
+    <div class="config">
+      Branch: {{git.branch}}<br>
+      Commit: {{git.commit_hash}} — {{git.commit_msg}}<br>
+      Author: {{git.author}}<br>
+      Time: {{git.commit_time}}
+      <div class="source-list">
+        <strong>Changed files:</strong>
+        {% for f in git.files_changed %}
+        <div class="source-item">• {{f}}</div>
+        {% endfor %}
+      </div>
+    </div>
+    <h3 style="margin-top:16px">LLM Config</h3>
     <div class="config">Endpoint: {{endpoint}}<br>API Key: {{api_key_masked}}</div>
   </div>
 </div>
+<script>
+function toggleDebug(){document.getElementById('debug').classList.toggle('collapsed')}
+</script>
 </body>
 </html>
 """
@@ -77,11 +137,17 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 @app.route("/")
 def index():
     masked = LLM_API_KEY[:4] + "*" * max(0, len(LLM_API_KEY)-8) + LLM_API_KEY[-4:] if len(LLM_API_KEY) > 8 else "****"
-    return render_template_string(HTML_TEMPLATE, endpoint=LLM_ENDPOINT, api_key_masked=masked)
+    git_info = get_git_info()
+    debug_log = "2026-08-17 08:45:12 [INFO] Pipeline triggered by commit " + git_info.get("commit_hash","unknown") + "\n2026-08-17 08:45:30 [BUILD] docker build completed\n2026-08-17 08:46:12 [TEST] Integration tests failed: payments.test timeout\n2026-08-17 08:46:15 [AI] Root cause analysis started"
+    return render_template_string(HTML_TEMPLATE, endpoint=LLM_ENDPOINT, api_key_masked=masked, git=git_info, debug_log=debug_log)
 
 @app.route("/api/config")
 def config():
     return jsonify({"llm_endpoint": LLM_ENDPOINT, "llm_api_key_set": bool(LLM_API_KEY)})
+
+@app.route("/api/git")
+def git_info_api():
+    return jsonify(get_git_info())
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=FLASK_PORT)
