@@ -20,13 +20,16 @@ unit-test:
   stage: test
   script:
     - echo "Running unit tests..."
-    - python -m pytest -q app/ || true
+    - pip install -r requirements.txt && pip install pytest
+    - python -m pytest -q tests/
+  allow_failure: false
 
+# Showcase injection: this stage fails ~70% of the time to demonstrate the
+# GenAI auto-fix loop. It is NOT a real product test — see docs/ai-capabilities.md.
 integration-test:
   stage: integration
   script:
     - echo "Running integration tests..."
-    # Intentional flaky failure to showcase GenAI auto-fix.
     - python -c "import random,sys; sys.exit(1) if random.random() < 0.7 else print('integration ok')"
   allow_failure: false
 
