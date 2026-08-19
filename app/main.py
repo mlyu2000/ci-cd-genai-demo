@@ -359,5 +359,15 @@ def stream():
             time.sleep(0.5)
     return Response(stream_with_context(gen()), mimetype="text/event-stream")
 
+# In mock mode, auto-seed one failing pipeline on startup so the dashboard
+# immediately shows the failure -> AI auto-fix flow (no manual trigger needed).
+if os.getenv("GITLAB_MODE", "real").lower() == "mock":
+    try:
+        _pid = int(os.getenv("GITLAB_PROJECT_ID", "1"))
+        if not webhook.poll_pipeline_state(_pid).get("pipeline"):
+            webhook.trigger_pipeline(_pid, "main")
+    except Exception as e:
+        print("mock seed skipped:", e)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=FLASK_PORT, threaded=True)
