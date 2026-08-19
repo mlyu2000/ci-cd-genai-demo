@@ -20,32 +20,33 @@ def _proj(pid):
     return _STATE[pid]
 
 
-def _trace_for(reason: str) -> str:
-    return (
-        "$ python -c \"import random,sys; "
-        "sys.exit(1) if random.random() < 0.7 else print('integration ok')\"\n"
-        "Traceback (most recent call last):\n"
-        "  File \"<string>\", line 1, in <module>\n"
-        f"Exception: {reason}\n"
-        "ERROR: integration-test job failed (exit 1)\n"
-    )
+# A concrete, fixable integration failure so the GenAI agent can produce a real
+# root cause + unified-diff patch during review (not a generic "random exit").
+_CHANGED_FILE = "tests/integration_test.py"
+_TRACE = (
+    "tests/integration_test.py::test_payments_pool FAILED\n"
+    "AssertionError: DB connection pool exhausted (max 5, 6 workers waiting)\n"
+    "  File \"tests/integration_test.py\", line 42, in test_payments_pool\n"
+    "    assert pool.available() >= workers, 'pool exhausted'\n"
+    "ERROR: integration-test job failed (exit 1)\n"
+)
 
 
 def seed_failing_pipeline(pid, ref: str = "main"):
     """Create a pipeline that fails at the integration stage (the showcase)."""
     p = _proj(pid)
     pid_id = p["next_pid"]; p["next_pid"] += 1
-    trace = _trace_for("Injected flaky failure to demonstrate GenAI auto-fix")
     jobs = [
         {"id": pid_id * 10 + 1, "pipeline_id": pid_id, "stage": "build",
          "name": "build", "status": "success", "trace": "docker build ... ok"},
         {"id": pid_id * 10 + 2, "pipeline_id": pid_id, "stage": "test",
          "name": "unit-test", "status": "success", "trace": "pytest -q ... 0 failed"},
         {"id": pid_id * 10 + 3, "pipeline_id": pid_id, "stage": "integration",
-         "name": "integration-test", "status": "failed", "trace": trace},
+         "name": "integration-test", "status": "failed", "trace": _TRACE,
+         "changed_files": [_CHANGED_FILE]},
     ]
     pipe = {"id": pid_id, "ref": ref, "status": "failed", "created_at": time.time()}
-    p["pipelines"].append({"pipeline": pipe, "jobs": jobs, "trace": trace})
+    p["pipelines"].append({"pipeline": pipe, "jobs": jobs, "trace": _TRACE})
     return pipe
 
 
@@ -57,15 +58,19 @@ def trigger_pipeline(pid, ref: str = "main"):
 def poll_pipeline_state(pid=None):
     p = _proj(pid or os.getenv("GITLAB_PROJECT_ID", "1"))
     if not p["pipelines"]:
-        return {"pipeline": None, "jobs": [], "failed_jobs": [], "trace": ""}
+        return {"pipeline": None, "jobs": [], "failed_jobs": [], "trace": "", "changed_files": []}
     last = p["pipelines"][-1]
     jobs = last["jobs"]
     failed = [j for j in jobs if j.get("status") == "failed"]
+    changed = []
+    for j in failed:
+        changed.extend(j.get("changed_files", []))
     return {
         "pipeline": last["pipeline"],
         "jobs": jobs,
         "failed_jobs": failed,
         "trace": last["trace"][:6000],
+        "changed_files": changed,
     }
 
 

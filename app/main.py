@@ -209,7 +209,7 @@ function pollState(){
     setDot('dot-build', b.status); setTxt('build-status', b.status||'-');
     setDot('dot-test', tst.status); setTxt('test-status', tst.status||'-');
     setDot('dot-int', intj.status); setTxt('int-status', intj.status?intj.status.toUpperCase():'-');
-    if(intj.status==='failed'){ lastTrace=s.trace||''; runAI(); }
+    if(intj.status==='failed'){ lastTrace=s.trace||''; window._changed=(s.changed_files||[]); runAI(); }
     if(p.status==='success'){
       document.getElementById('kpi-rate').textContent='100%';
       if(window._autonomous && window._pendingMR) autoMerge();
@@ -244,7 +244,7 @@ function runAI(){
   document.getElementById('ai-card').style.display='block';
   document.getElementById('ai-reason').textContent='Analyzing failure...';
   fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({trace:lastTrace,job:'integration-test'})})
+  body:JSON.stringify({trace:lastTrace,job:'integration-test',changed_files:window._changed||[]})})
    .then(r=>r.json()).then(a=>{
      typeText(document.getElementById('ai-reason'),
        'Root cause: '+a.root_cause+'\\n\\nSummary: '+a.summary);
@@ -327,7 +327,7 @@ def analyze():
     git_info = get_git_info()
     analysis = genai_agent.analyze_failure(
         job_trace=data.get("trace", "Integration test failed: random exit 1"),
-        changed_files=list(git_info.get("files_changed", []) or []),
+        changed_files=list(data.get("changed_files") or git_info.get("files_changed", []) or []),
         commit_msg=git_info.get("commit_msg", ""),
     )
     return jsonify(analysis)
