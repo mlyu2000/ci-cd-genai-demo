@@ -5,13 +5,19 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, render_template_string, jsonify, request, Response, stream_with_context
 from dotenv import load_dotenv
-import git
 from datetime import datetime
 
 import webhook
 import genai_agent
 
 load_dotenv()
+
+# GitPython import is deferred: it hard-fails at import time when no `git`
+# binary is present (e.g. minimal CI python image). Only import it where used.
+try:
+    import git  # noqa: E402
+except Exception:  # pragma: no cover - import guard
+    git = None
 
 app = Flask(__name__)
 
@@ -27,9 +33,8 @@ webhook.init_db()
 
 def get_git_info():
     try:
-        import shutil
-        if not shutil.which("git"):
-            return {"error": "git executable not found", "branch": "n/a",
+        if git is None:
+            return {"error": "git unavailable", "branch": "n/a",
                     "commit_hash": "n/a", "commit_msg": "n/a", "author": "n/a",
                     "commit_time": "n/a", "files_changed": []}
         repo = git.Repo(REPO_PATH)
