@@ -340,7 +340,7 @@ def approve():
     branch = "auto-fix/genai-" + datetime.now().strftime("%H%M%S")
     mr = webhook.create_merge_request(
         project_id, branch, genai_agent.suggest_mr_title(a), a.get("patch", ""),
-        target="main", analysis=a)
+        target="master", analysis=a)
     if mr.get("applied"):
         webhook.record_auto_fix(a)
     return jsonify(mr)

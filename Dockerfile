@@ -4,7 +4,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
-COPY .env ./
 ENV FLASK_APP=app/main.py
 ENV GIT_PYTHON_REFRESH=quiet
 EXPOSE 8080
