@@ -38,11 +38,19 @@ def get_git_info():
                     "commit_hash": "n/a", "commit_msg": "n/a", "author": "n/a",
                     "commit_time": "n/a", "files_changed": []}
         repo = git.Repo(REPO_PATH)
+        try:
+            branch = repo.active_branch.name
+        except TypeError:
+            # detached HEAD (common in CI): report the short sha instead
+            branch = "detached"
         commit = repo.head.commit
-        files_changed = [i.a_path for i in repo.index.diff(commit.parents[0] if commit.parents else None)] or \
-                       [i.a_path for i in repo.index.diff(None)]
+        try:
+            files_changed = [i.a_path for i in repo.index.diff(commit.parents[0])] or \
+                            [i.a_path for i in repo.index.diff(None)]
+        except Exception:
+            files_changed = []
         return {
-            "branch": repo.active_branch.name,
+            "branch": branch,
             "commit_hash": commit.hexsha[:8],
             "commit_msg": commit.message.split("\n")[0],
             "commit_time": datetime.fromtimestamp(commit.committed_date).isoformat(),
@@ -50,7 +58,9 @@ def get_git_info():
             "files_changed": files_changed[:10],
         }
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e), "commit_hash": "n/a", "branch": "n/a",
+                "commit_msg": "n/a", "author": "n/a", "commit_time": "n/a",
+                "files_changed": []}
 
 HTML = """
 <!DOCTYPE html>
