@@ -27,6 +27,11 @@ webhook.init_db()
 
 def get_git_info():
     try:
+        import shutil
+        if not shutil.which("git"):
+            return {"error": "git executable not found", "branch": "n/a",
+                    "commit_hash": "n/a", "commit_msg": "n/a", "author": "n/a",
+                    "commit_time": "n/a", "files_changed": []}
         repo = git.Repo(REPO_PATH)
         commit = repo.head.commit
         files_changed = [i.a_path for i in repo.index.diff(commit.parents[0] if commit.parents else None)] or \

@@ -23,6 +23,8 @@ build:
 unit-test:
   stage: test
   image: $CI_IMAGE
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1 || true
   script:
     - echo "Running unit tests..."
     - pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir pytest
