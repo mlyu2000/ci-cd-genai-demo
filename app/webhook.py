@@ -124,12 +124,13 @@ def get_metrics() -> dict:
         row = conn.execute("SELECT auto_fix_count, manual_fix_count, releases, last_risk, saved_minutes, baseline_mttr FROM kpis WHERE id = 1").fetchone()
     if not row:
         return {"mttr_min": 4.0, "auto_fix_rate": 87, "releases_week": 12,
-                "risk_score": 35, "saved_minutes": 87 * 35}
+                "risk_score": 35, "saved_minutes": 87 * 35, "hours_saved_per_week": 25.5}
     auto, manual, releases, risk, saved, mttr = row
     total = auto + manual
     rate = round(100 * auto / total) if total else 0
+    hours_saved = round((saved or 0) / 60 / 7, 1)
     return {"mttr_min": mttr, "auto_fix_rate": rate, "releases_week": releases,
-            "risk_score": risk or 0, "saved_minutes": saved or 0}
+            "risk_score": risk or 0, "saved_minutes": saved or 0, "hours_saved_per_week": hours_saved}
 
 
 # --------------------------------------------------------------------------

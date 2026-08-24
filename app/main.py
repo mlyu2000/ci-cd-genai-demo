@@ -122,10 +122,11 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 </header>
 
 <div class="hero">
-  <div class="card"><div class="kpi" id="kpi-mttr">--</div><div class="kpi-label">MTTR (min) • baseline 4m</div></div>
-  <div class="card"><div class="kpi" id="kpi-rate">--%</div><div class="kpi-label">Auto-Fix Rate</div></div>
-  <div class="card"><div class="kpi" id="kpi-rel">--</div><div class="kpi-label">Releases / week</div></div>
-  <div class="card"><div class="kpi" id="kpi-risk">--</div><div class="kpi-label">Risk Score</div></div>
+<div class="card"><div class="kpi" id="kpi-mttr">--</div><div class="kpi-label">MTTR (min) • baseline 4m</div></div>
+<div class="card"><div class="kpi" id="kpi-rate">--%</div><div class="kpi-label">Auto-Fix Rate</div></div>
+<div class="card"><div class="kpi" id="kpi-rel">--</div><div class="kpi-label">Releases / week</div></div>
+<div class="card"><div class="kpi" id="kpi-risk">--</div><div class="kpi-label">Risk Score</div></div>
+<div class="card"><div class="kpi" id="kpi-savings">--</div><div class="kpi-label">Hours Saved / Week</div></div>
 </div>
 
 <div class="main">
@@ -152,7 +153,51 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
         <span class="gauge" id="g-risk" style="--c:var(--hpe-amber);--v:0;margin-left:14px">0</span>
         <span style="color:var(--muted);font-size:11px">Risk</span>
       </div>
-      <div class="diff" id="ai-diff"></div>
+      
+      <!-- Tabs -->
+      <div style="margin:12px 0;border-bottom:1px solid var(--border)">
+        <button class="btn secondary" onclick="switchTab('tab-reasoning')" id="btn-reasoning" style="padding:6px 10px;font-size:12px">Reasoning</button>
+        <button class="btn secondary" onclick="switchTab('tab-patch')" id="btn-patch" style="padding:6px 10px;font-size:12px">Patch</button>
+        <button class="btn secondary" onclick="switchTab('tab-validation')" id="btn-validation" style="padding:6px 10px;font-size:12px">Validation</button>
+        <button class="btn secondary" onclick="switchTab('tab-baseline')" id="btn-baseline" style="padding:6px 10px;font-size:12px">Manual Baseline</button>
+      </div>
+      
+      <div id="tab-reasoning" style="display:none">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:8px">Root Cause</div>
+        <div id="reasoning-cause" style="font-weight:600;margin-bottom:8px"></div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Reasoning Steps</div>
+        <div id="reasoning-steps" style="font-size:12px;white-space:pre-wrap"></div>
+        <div style="font-size:13px;color:var(--muted);margin:8px 0 4px">Failure Category</div>
+        <div id="reasoning-category" style="font-size:12px"></div>
+      </div>
+      
+      <div id="tab-patch" style="display:none">
+        <div class="diff" id="ai-diff"></div>
+        <div id="patch-files" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+      </div>
+      
+      <div id="tab-validation" style="display:none">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Validation Commands</div>
+        <div id="validation-commands" style="font-size:12px;white-space:pre-wrap;font-family:monospace"></div>
+        <div style="font-size:13px;color:var(--muted);margin:8px 0 4px">Risk Assessment</div>
+        <div id="risk-assessment" style="font-size:12px"></div>
+        <div style="font-size:13px;color:var(--muted);margin:8px 0 4px">Gate Status</div>
+        <div id="gate-status" style="font-size:12px;font-weight:600"></div>
+      </div>
+      
+      <div id="tab-baseline" style="display:none">
+        <div style="background:rgba(227,37,75,0.1);border:1px solid var(--hpe-red);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div style="font-weight:600;color:var(--hpe-red);margin-bottom:6px">⚠️ Manual Triage Baseline</div>
+          <div id="baseline-time" style="font-size:13px"></div>
+          <div id="baseline-steps" style="font-size:12px;margin-top:6px"></div>
+        </div>
+        <div style="background:rgba(95,200,10,0.1);border:1px solid var(--hpe-green);border-radius:8px;padding:12px">
+          <div style="font-weight:600;color:var(--hpe-green);margin-bottom:6px">✅ AI Auto-Fix</div>
+          <div id="auto-time" style="font-size:13px"></div>
+          <div id="time-saved" style="font-size:12px;margin-top:6px;font-weight:600"></div>
+        </div>
+      </div>
+      
       <div class="mr-link" id="mr-link" style="display:none"></div>
       <div style="margin-top:10px">
         <button class="btn" onclick="approveFix()">Approve Auto-Fix</button>
@@ -186,6 +231,12 @@ let lastTrace="";
 function toggleTheme(){const h=document.documentElement;h.dataset.theme=h.dataset.theme==='light'?'dark':'light';localStorage.setItem('theme',h.dataset.theme);}
 const t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t;
 function toggleDebug(){document.getElementById('debug').classList.toggle('collapsed');}
+function switchTab(tabId){
+  const tabs=['tab-reasoning','tab-patch','tab-validation','tab-baseline'];
+  tabs.forEach(t=>{const el=document.getElementById(t); if(el) el.style.display=(t===tabId)?'block':'none';});
+  const btns={'tab-reasoning':'btn-reasoning','tab-patch':'btn-patch','tab-validation':'btn-validation','tab-baseline':'btn-baseline'};
+  Object.entries(btns).forEach(([t,b])=>{const el=document.getElementById(b); if(el) el.style.fontWeight=(t===tabId)?'700':'400';});
+}
 function log(msg){const d=document.getElementById('debug-log');d.textContent+=msg+"\\n";d.scrollTop=d.scrollHeight;}
 function streamEvent(e){const s=document.getElementById('stream');s.innerHTML+="<div>["+new Date().toLocaleTimeString()+"] "+JSON.stringify(e)+"</div>";}
 
@@ -206,6 +257,7 @@ function loadMetrics(){
     document.getElementById('kpi-rate').textContent=m.auto_fix_rate+'%';
     document.getElementById('kpi-rel').textContent=m.releases_week;
     document.getElementById('kpi-risk').textContent=m.risk_score;
+    document.getElementById('kpi-savings').textContent=m.hours_saved_per_week;
   });
 }
 loadMetrics();
@@ -262,6 +314,7 @@ function typeText(el, text, done){
 }
 function runAI(){
   document.getElementById('ai-card').style.display='block';
+  switchTab('tab-reasoning');
   document.getElementById('ai-reason').textContent='Analyzing failure...';
   fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify({trace:lastTrace,job:'integration-test',changed_files:window._changed||[]})})
@@ -273,11 +326,55 @@ function runAI(){
      document.getElementById('g-risk').style.setProperty('--v',a.risk_score||0);
      document.getElementById('g-risk').textContent=a.risk_score||0;
      renderDiff(a.patch);
+     
+     // Update reasoning tab
+     document.getElementById('reasoning-cause').textContent = a.root_cause;
+     document.getElementById('reasoning-steps').textContent = (a.reasoning_steps || []).map((s,i)=>`\${i+1}. ${s}`).join('\\n');
+     document.getElementById('reasoning-category').textContent = a.failure_category || 'unknown';
+     
+     // Update validation tab
+     document.getElementById('validation-commands').textContent = (a.validation_commands || []).join('\\n');
+     document.getElementById('risk-assessment').textContent = `Risk Score: ${a.risk_score||0}/100 - ${a.risk_score<30?'Low':a.risk_score<70?'Medium':'High'} risk`;
+     
+     // Update baseline tab
+     const manualMin = a.manual_triage_minutes || 45;
+     const autoMin = a.auto_triage_minutes || 5;
+     const saved = manualMin - autoMin;
+     const savedPct = Math.round((saved/manualMin)*100);
+     document.getElementById('baseline-time').textContent = `Manual triage: ~${manualMin} minutes`;
+     document.getElementById('baseline-steps').textContent = 'Steps: Download logs -> Manual root cause analysis -> Local reproduction -> Code fix -> PR creation -> Review';
+     document.getElementById('auto-time').textContent = `AI auto-fix: ~${autoMin} minutes`;
+     document.getElementById('time-saved').textContent = `Time saved: ${saved} min (${savedPct}% faster)`;
+     
+     // Gate status
+     const confidenceGate = (a.confidence || 0) >= 0.7;
+     const riskGate = (a.risk_score || 100) <= 70;
+     const gatePassed = confidenceGate && riskGate;
+     document.getElementById('gate-status').textContent = gatePassed ? '✅ Gates PASSED - Auto-merge allowed' : '⚠️ Gates FAILED - Manual review required';
+     document.getElementById('gate-status').style.color = gatePassed ? 'var(--hpe-green)' : 'var(--hpe-amber)';
+     
+     // Patch files
+     document.getElementById('patch-files').textContent = `Files: ${(a.files_touched || []).join(', ') || 'N/A'}`;
+     
      window._analysis=a;
    });
 }
 
 function approveFix(){
+  if(!window._analysis){
+    alert('No analysis available');
+    return;
+  }
+  const analysis = window._analysis;
+  const confidenceGate = (analysis.confidence || 0) >= 0.7;
+  const riskGate = (analysis.risk_score || 100) <= 70;
+  const gatePassed = confidenceGate && riskGate;
+  
+  if(!gatePassed && document.getElementById('autonomous').checked){
+    alert('Gates not passed - cannot auto-merge. Uncheck autonomous mode or improve confidence/risk.');
+    return;
+  }
+  
   document.getElementById('mr-link').style.display='none';
   fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({analysis:window._analysis})}).then(r=>r.json()).then(x=>{
@@ -345,10 +442,16 @@ def gitlab_webhook():
 def analyze():
     data = request.get_json(force=True, silent=True) or {}
     git_info = get_git_info()
+    # In mock mode, pull the curated scenario so the agent runs fully offline.
+    scenario = None
+    if os.getenv("GITLAB_MODE", "real").lower() == "mock":
+        state = webhook.poll_pipeline_state(int(os.getenv("GITLAB_PROJECT_ID", "1")))
+        scenario = state.get("scenario")
     analysis = genai_agent.analyze_failure(
         job_trace=data.get("trace", "Integration test failed: random exit 1"),
         changed_files=list(data.get("changed_files") or git_info.get("files_changed", []) or []),
         commit_msg=git_info.get("commit_msg", ""),
+        scenario=scenario,
     )
     return jsonify(analysis)
 
