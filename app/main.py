@@ -161,7 +161,8 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 
 <div class="main">
   <div class="card">
-    <h3>Pipeline • <span id="ref">main</span> #<span id="pid">-</span></h3>
+    <h3>Pipeline • <span id="ref">-</span> #<span id="pid">-</span></h3>
+    <div id="ref-hint" style="display:none;font-size:12px;color:var(--muted);margin-top:8px">No pipeline yet — click <b style="color:var(--hpe-blue)">▶ Run Pipeline</b> to start one (pipelines only start on demand, never automatically).</div>
     <div class="flow" id="flow">
       <div class="flow-stage" id="fs-build">
         <div class="flow-dot" id="dot-build"></div>
@@ -352,8 +353,15 @@ function _flowState(st){ return st==='success'?'ok':st==='failed'?'err':st==='ru
 function pollState(){
   fetch('/api/poll').then(r=>r.json()).then(s=>{
     const p=s.pipeline||{};
-    document.getElementById('ref').textContent=p.ref||'-';
-    document.getElementById('pid').textContent=p.id||'-';
+    if(!p.id){
+      document.getElementById('ref').textContent='-';
+      document.getElementById('pid').textContent='-';
+      document.getElementById('ref-hint').style.display='block';
+    } else {
+      document.getElementById('ref-hint').style.display='none';
+      document.getElementById('ref').textContent=p.ref||'-';
+      document.getElementById('pid').textContent=p.id||'-';
+    }
     const js=s.jobs||[];
     const byName=n=>js.filter(j=>j.name===n)[0];
     const stCls=st=>st==='success'?'ok':st==='failed'?'err':st==='running'?'run':'';
@@ -668,15 +676,8 @@ def stream():
             time.sleep(0.5)
     return Response(stream_with_context(gen()), mimetype="text/event-stream")
 
-# In mock mode, auto-seed one failing pipeline on startup so the dashboard
-# immediately shows the failure -> AI auto-fix flow (no manual trigger needed).
-if os.getenv("GITLAB_MODE", "real").lower() == "mock":
-    try:
-        _pid = int(os.getenv("GITLAB_PROJECT_ID", "1"))
-        if not webhook.poll_pipeline_state(_pid).get("pipeline"):
-            webhook.trigger_pipeline(_pid, "main")
-    except Exception as e:
-        print("mock seed skipped:", e)
+# NOTE: pipelines are NOT auto-seeded at startup. The dashboard starts empty;
+# the user triggers a run with the "▶ Run Pipeline" button (real or mock mode).
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=FLASK_PORT, threaded=True)

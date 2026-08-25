@@ -4,6 +4,12 @@ stages:
   - integration
   - deploy
 
+# No auto-start on push: pipelines run only when a user clicks "Run Pipeline"
+# (manual/API trigger) or when a merge request is opened (fix verification).
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "push"
+
 variables:
   DOCKER_DRIVER: overlay2
   # Runner uses the docker executor; give CI jobs a Python image that has pip.
@@ -40,6 +46,7 @@ integration-test:
   image: $CI_IMAGE
   script:
     - echo "Running integration tests (payments service under load)..."
+    - pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir pytest
     - python -m pytest -q tests/integration_test.py
   allow_failure: false
 
