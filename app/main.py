@@ -228,8 +228,9 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 
 <script>
 let lastTrace="";
+let pollTimer=null;
 function toggleTheme(){const h=document.documentElement;h.dataset.theme=h.dataset.theme==='light'?'dark':'light';localStorage.setItem('theme',h.dataset.theme);}
-const t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t;
+let _t=null; try{ _t=localStorage.getItem('theme'); }catch(e){} if(_t)document.documentElement.dataset.theme=_t;
 function toggleDebug(){document.getElementById('debug').classList.toggle('collapsed');}
 function switchTab(tabId){
   const tabs=['tab-reasoning','tab-patch','tab-validation','tab-baseline'];
@@ -265,7 +266,6 @@ loadMetrics();
 startPolling();
 
 // Poll GitLab pipeline state (real or mock)
-let pollTimer=null;
 function pollState(){
   fetch('/api/poll').then(r=>r.json()).then(s=>{
     const p=s.pipeline||{};
