@@ -422,12 +422,17 @@ function pollState(){
     }
     if(p.status==='success'){
       document.getElementById('kpi-rate').textContent='100%';
-      log('pipeline #'+p.id+' green — deploy stage would run now','OK');
-      if(window._autonomous && window._pendingMR) autoMerge();
     }
-    // Event stream: only emit when the status actually CHANGES (dedupe).
+    // Event stream + "green" log: only when the status actually CHANGES (dedupe).
     const key=(p.id||0)+'|'+(p.status||'-');
-    if(key!==_lastEventKey){ _lastEventKey=key; streamEvent({type:'pipeline',id:p.id,status:p.status,jobs:js.length}); }
+    if(key!==_lastEventKey){
+      _lastEventKey=key;
+      streamEvent({type:'pipeline',id:p.id,status:p.status,jobs:js.length});
+      if(p.status==='success'){
+        log('pipeline #'+p.id+' green — deploy stage would run now','OK');
+        if(window._autonomous && window._pendingMR) autoMerge();
+      }
+    }
   });
 }
 function runPipeline(){
