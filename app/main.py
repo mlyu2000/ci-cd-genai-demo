@@ -99,7 +99,10 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 .diff .add{background:rgba(95,200,10,.15);color:#9bff5a;display:block}
 .diff .del{background:rgba(227,37,75,.15);color:#ff7a96;display:block}
 .diff .meta{color:var(--hpe-amber);display:block}
-.gauge{display:inline-block;width:46px;height:46px;border-radius:50%;background:conic-gradient(var(--c) calc(var(--v)*1%),var(--border) 0);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.metric-row{display:flex;gap:12px;margin:4px 0 0;flex-wrap:wrap}
+.metric-card{flex:1;min-width:130px;background:#0a0f1a;border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+.metric-value{font-size:24px;font-weight:700;line-height:1.1}
+.metric-label{font-size:11px;color:var(--muted);margin-top:4px}
 .btn{background:var(--hpe-blue);border:none;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;margin-right:8px}
 .btn.secondary{background:var(--card);color:var(--text);border:1px solid var(--border)}
 .source-list{font-size:12px;color:var(--muted);margin-top:8px}
@@ -147,11 +150,19 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
       <div class="ai-card" id="ai-card" style="display:none">
       <h4>🤖 AI Root-Cause & Auto-Fix</h4>
       <div id="ai-reason" style="white-space:pre-wrap"></div>
-      <div style="margin:10px 0">
-        <span class="gauge" id="g-conf" style="--c:var(--hpe-green);--v:0">0%</span>
-        <span style="color:var(--muted);font-size:11px">Confidence</span>
-        <span class="gauge" id="g-risk" style="--c:var(--hpe-amber);--v:0;margin-left:14px">0</span>
-        <span style="color:var(--muted);font-size:11px">Risk</span>
+      <div class="metric-row">
+        <div class="metric-card">
+          <div class="metric-value" id="g-conf" style="color:var(--hpe-green)">--</div>
+          <div class="metric-label">Confidence (gate ≥ 0.70)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="g-risk" style="color:var(--hpe-amber)">--</div>
+          <div class="metric-label">Risk Score (gate ≤ 70)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="g-gate" style="color:var(--muted)">--</div>
+          <div class="metric-label">Auto-Merge Gate</div>
+        </div>
       </div>
       
       <!-- Tabs -->
@@ -266,6 +277,8 @@ loadMetrics();
 startPolling();
 
 // Poll GitLab pipeline state (real or mock)
+let _analyzedPid=null;      // analyze once per pipeline (prevents the infinite re-print loop)
+let _lastEventKey=null;     // dedupe event-stream entries
 function pollState(){
   fetch('/api/poll').then(r=>r.json()).then(s=>{
     const p=s.pipeline||{};
@@ -281,15 +294,24 @@ function pollState(){
     setDot('dot-build', b.status); setTxt('build-status', b.status||'-');
     setDot('dot-test', tst.status); setTxt('test-status', tst.status||'-');
     setDot('dot-int', intj.status); setTxt('int-status', intj.status?intj.status.toUpperCase():'-');
-    if(intj.status==='failed'){ lastTrace=s.trace||''; window._changed=(s.changed_files||[]); runAI(); }
+    // Fire the AI analysis only when this pipeline first transitions to failed
+    // (one analyze per pipeline id) — NOT on every 4s poll.
+    if(intj.status==='failed' && p.id && _analyzedPid!==p.id){
+      lastTrace=s.trace||''; window._changed=(s.changed_files||[]);
+      _analyzedPid=p.id;
+      runAI();
+    }
     if(p.status==='success'){
       document.getElementById('kpi-rate').textContent='100%';
       if(window._autonomous && window._pendingMR) autoMerge();
     }
-    streamEvent({type:'poll',pipeline:p.status,jobs:js.length});
+    // Event stream: only emit when the status actually CHANGES (dedupe).
+    const key=(p.id||0)+'|'+(p.status||'-');
+    if(key!==_lastEventKey){ _lastEventKey=key; streamEvent({type:'pipeline',id:p.id,status:p.status,jobs:js.length}); }
   });
 }
 function runPipeline(){
+  _analyzedPid=null; // new pipeline may need a fresh analysis
   fetch('/api/trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:'master'})})
     .then(r=>r.json()).then(x=>{ log('Pipeline triggered: '+JSON.stringify(x).slice(0,200)); startPolling(); });
 }
@@ -321,10 +343,19 @@ function runAI(){
    .then(r=>r.json()).then(a=>{
      typeText(document.getElementById('ai-reason'),
        'Root cause: '+a.root_cause+'\\n\\nSummary: '+a.summary);
-     document.getElementById('g-conf').style.setProperty('--v',Math.round((a.confidence||0)*100));
-     document.getElementById('g-conf').textContent=Math.round((a.confidence||0)*100)+'%';
-     document.getElementById('g-risk').style.setProperty('--v',a.risk_score||0);
-     document.getElementById('g-risk').textContent=a.risk_score||0;
+     // KPI metric cards (not pie charts): confidence + risk + gate
+     const confPct=Math.round((a.confidence||0)*100);
+     const risk=a.risk_score||0;
+    const cardGatePass=(a.confidence||0)>=0.7 && risk<=70;
+    const gConf=document.getElementById('g-conf');
+    gConf.textContent=confPct+'%';
+    gConf.style.color=cardGatePass?'var(--hpe-green)':'var(--hpe-red)';
+    const gRisk=document.getElementById('g-risk');
+    gRisk.textContent=risk+'/100';
+    gRisk.style.color=risk<=70?'var(--hpe-amber)':'var(--hpe-red)';
+    const gGate=document.getElementById('g-gate');
+    gGate.textContent=cardGatePass?'PASS':'FAIL';
+    gGate.style.color=cardGatePass?'var(--hpe-green)':'var(--hpe-red)';
      renderDiff(a.patch);
      
      // Update reasoning tab
