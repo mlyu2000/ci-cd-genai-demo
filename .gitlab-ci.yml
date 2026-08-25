@@ -28,17 +28,19 @@ unit-test:
   script:
     - echo "Running unit tests..."
     - pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir pytest
-    - python -m pytest -q tests/
+    - python -m pytest -q tests/test_app.py
   allow_failure: false
 
-# Showcase injection: this stage fails ~70% of the time to demonstrate the
-# GenAI auto-fix loop. It is NOT a real product test — see docs/ai-capabilities.md.
+# Integration tests: REAL tests (tests/integration_test.py) that deterministically
+# fail in this demo repo — they assert a 6-worker load against a 5-connection DB
+# pool, mirroring the "DB pool exhaustion" scenario the GenAI agent auto-fixes.
+# This is the failure the demo showcases; it is NOT a coin flip.
 integration-test:
   stage: integration
   image: $CI_IMAGE
   script:
-    - echo "Running integration tests..."
-    - python -c "import random,sys; sys.exit(1) if random.random() < 0.7 else print('integration ok')"
+    - echo "Running integration tests (payments service under load)..."
+    - python -m pytest -q tests/integration_test.py
   allow_failure: false
 
 deploy:
