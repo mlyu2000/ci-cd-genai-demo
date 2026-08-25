@@ -363,8 +363,10 @@ function pollState(){
     const b=byName('build')||{};
     const tst=byName('unit-test')||{};
     const intj=byName('integration-test')||{};
-    setDot('dot-build', b.status); setStat('build-status', b.status||'-', b.status);
-    setDot('dot-test', tst.status); setStat('test-status', tst.status||'-', tst.status);
+    // Show status + real duration so every stage is transparent, not a dot.
+    const fmt=(j)=>{ let t=j.status||'-'; if(j.duration!=null && j.status!=='running' && j.status!=='created' && j.status!=='pending') t+=' \u2022 '+Number(j.duration).toFixed(0)+'s'; return t; };
+    setDot('dot-build', b.status); setStat('build-status', fmt(b), b.status);
+    setDot('dot-test', tst.status); setStat('test-status', fmt(tst), tst.status);
     setDot('dot-int', intj.status); setStat('int-status', intj.status?intj.status.toUpperCase():'-', intj.status);
     // connector colors follow the stage that FEEDS them
     setLine('fline-build', b.status);
@@ -373,6 +375,8 @@ function pollState(){
     // Explain what the integration stage actually tests (demystify the black box).
     const sc=s.scenario;
     const scCard=document.getElementById('scenario-card');
+    const stageDoc =
+      '<b>Build</b> = compile-check all Python (py_compile). &nbsp;•&nbsp; <b>Unit Tests</b> = pytest on the Flask app (tests/test_app.py). &nbsp;•&nbsp; <b>Integration Tests</b> = payments service under load (tests/integration_test.py): 6 parallel workers open DB connections; the pool allows only 5, so this test deterministically fails and hands the AI agent its triage target. Each stage runs on the real GitLab runner in its own job.';
     if(sc){
       scCard.style.display='block';
       const descMap={
@@ -386,7 +390,9 @@ function pollState(){
       document.getElementById('scenario-desc').innerHTML +=
         ' <span style="color:var(--muted)">→ the AI agent receives the failing trace + the source of that file and must propose the fix.</span>';
     } else {
-      scCard.style.display='none';
+      // Real GitLab mode: no scenario object — show the static stage doc.
+      scCard.style.display='block';
+      document.getElementById('scenario-desc').innerHTML = stageDoc;
     }
 
     // Rich debug console: log meaningful state CHANGES, not "poll tick".
