@@ -42,31 +42,98 @@ def get_git_info():
         if git is None:
             return {"error": "git unavailable", "branch": "n/a",
                     "commit_hash": "n/a", "commit_msg": "n/a", "author": "n/a",
-                    "commit_time": "n/a", "files_changed": []}
+                    "author_name": "n/a", "author_email": "n/a",
+                    "commit_time": "n/a", "files_changed": [], "diffstat": [],
+                    "total_added": 0, "total_deleted": 0, "files_count": 0,
+                    "dirty": [], "recent_commits": [], "remote": "n/a",
+                    "commit_count": 0, "full_message": "n/a"}
         repo = git.Repo(REPO_PATH)
         try:
             branch = repo.active_branch.name
         except TypeError:
-            # detached HEAD (common in CI): report the short sha instead
             branch = "detached"
         commit = repo.head.commit
+
+        # Per-file diffstat vs the parent using `git diff --numstat` (exact line counts).
+        diffstat = []
+        total_added = total_deleted = 0
         try:
-            files_changed = [i.a_path for i in repo.index.diff(commit.parents[0])] or \
-                            [i.a_path for i in repo.index.diff(None)]
+            parent = commit.parents[0] if commit.parents else None
+            ref_a = commit.hexsha if parent is None else parent.hexsha
+            ref_b = commit.hexsha
+            out = repo.git.diff("--numstat", ref_a, ref_b)
+            for line in out.splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 3 and parts[0] not in ("", "-"):
+                    ins = int(parts[0]) if parts[0].isdigit() else 0
+                    deleted = int(parts[1]) if parts[1].isdigit() else 0
+                    path = parts[-1]
+                    total_added += ins
+                    total_deleted += deleted
+                    diffstat.append({"path": path, "change_type": "M",
+                                     "added": ins, "deleted": deleted})
+            diffstat.sort(key=lambda d: d["path"])
         except Exception:
-            files_changed = []
+            diffstat = []
+        files_changed = [d["path"] for d in diffstat] or \
+                        [i.a_path for i in repo.index.diff(None)]
+
+        # Working-tree status (uncommitted changes) for observability.
+        dirty = []
+        try:
+            for d in repo.index.diff("HEAD"):
+                dirty.append(d.a_path)
+            dirty.extend(repo.untracked_files)
+            dirty = sorted(set(dirty))
+        except Exception:
+            dirty = []
+
+        # Recent commit history (for the "control & observability" panel).
+        recent = []
+        for c in list(repo.iter_commits())[:5]:
+            recent.append({"hash": c.hexsha[:8],
+                           "msg": c.message.split("\n")[0][:90],
+                           "author": c.author.name,
+                           "time": datetime.fromtimestamp(c.committed_date).isoformat()})
+
+        # Primary remote.
+        remote = "n/a"
+        try:
+            if repo.remotes:
+                r = repo.remotes[0]
+                remote = (r.url or "n/a").replace("https://", "")
+        except Exception:
+            remote = "n/a"
+
         return {
             "branch": branch,
             "commit_hash": commit.hexsha[:8],
+            "commit_hash_full": commit.hexsha,
             "commit_msg": commit.message.split("\n")[0],
+            "full_message": commit.message.strip(),
             "commit_time": datetime.fromtimestamp(commit.committed_date).isoformat(),
             "author": f"{commit.author.name} <{commit.author.email}>",
-            "files_changed": files_changed[:10],
+            "author_name": commit.author.name,
+            "author_email": commit.author.email,
+            "committer": f"{commit.committer.name} <{commit.committer.email}>",
+            "files_changed": files_changed[:30],
+            "files_count": len(files_changed),
+            "diffstat": diffstat[:30],
+            "total_added": total_added,
+            "total_deleted": total_deleted,
+            "dirty": dirty[:20],
+            "is_dirty": len(dirty) > 0,
+            "recent_commits": recent,
+            "remote": remote,
+            "commit_count": len(list(repo.iter_commits())),
         }
     except Exception as e:
         return {"error": str(e), "commit_hash": "n/a", "branch": "n/a",
-                "commit_msg": "n/a", "author": "n/a", "commit_time": "n/a",
-                "files_changed": []}
+                "commit_msg": "n/a", "author": "n/a", "author_name": "n/a",
+                "author_email": "n/a", "commit_time": "n/a", "files_changed": [],
+                "diffstat": [], "total_added": 0, "total_deleted": 0, "files_count": 0,
+                "dirty": [], "recent_commits": [], "remote": "n/a",
+                "commit_count": 0, "full_message": "n/a"}
 
 HTML = """
 <!DOCTYPE html>
@@ -126,6 +193,23 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 .btn.secondary{background:var(--card);color:var(--text);border:1px solid var(--border)}
 .source-list{font-size:12px;color:var(--muted);margin-top:8px}
 .source-item{padding:4px 0;border-bottom:1px solid var(--border)}
+.src-grid{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;margin-top:6px}
+.src-grid .k{color:var(--muted)}
+.src-grid .v{color:var(--text);word-break:break-all}
+.diffstat{margin-top:8px;max-height:150px;overflow:auto;border:1px solid var(--border);border-radius:8px}
+.diffstat-row{display:flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;border-bottom:1px solid var(--border);font-family:monospace}
+.diffstat-row:last-child{border-bottom:none}
+.diffstat-row .ct{width:16px;height:16px;border-radius:4px;font-size:10px;font-weight:700;display:inline-flex;align-items:center;justify-content:center}
+.ct.M{background:rgba(0,120,212,.2);color:#6cb8ff}.ct.A{background:rgba(95,200,10,.2);color:var(--hpe-green)}
+.ct.D{background:rgba(227,37,75,.2);color:var(--hpe-red)}.ct.R{background:rgba(245,166,35,.2);color:var(--hpe-amber)}
+.diffstat-row .fp{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.diffstat-row .add{color:var(--hpe-green);min-width:44px;text-align:right}
+.diffstat-row .del{color:var(--hpe-red);min-width:44px;text-align:right}
+.diffstat-total{padding:4px 8px;font-size:11px;border-top:1px solid var(--border);font-family:monospace}
+.mini-commit{font-size:11px;padding:3px 0;border-bottom:1px dashed var(--border);font-family:monospace}
+.mini-commit:last-child{border-bottom:none}
+.dirty-chip{display:inline-block;background:rgba(245,166,35,.18);color:var(--hpe-amber);border-radius:5px;padding:1px 6px;font-size:10px;margin:1px 2px 1px 0}
+.clean-chip{display:inline-block;background:rgba(95,200,10,.18);color:var(--hpe-green);border-radius:5px;padding:1px 6px;font-size:10px}
 .debug-console{margin-top:14px}
 .debug-header{display:flex;justify-content:space-between;align-items:center}
 .debug-content{max-height:260px;overflow:auto;background:#0a0f1a;border:1px solid var(--border);border-radius:8px;padding:8px;font-family:monospace;font-size:12px;color:#c5d0e0}
@@ -270,15 +354,24 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
   </div>
 
   <div class="card">
-    <h3>Source & Commit</h3>
-    <div style="font-size:13px;color:var(--muted)">
-      Branch: <span id="g-branch"></span><br>
-      Commit: <span id="g-hash"></span> — <span id="g-msg"></span><br>
-      Author: <span id="g-author"></span><br>
-      Time: <span id="g-time"></span>
-      <div class="source-list" id="g-files"></div>
-      <div style="margin-top:10px">GenAI Agent: <span id="g-llm" style="color:var(--hpe-teal)"></span></div>
+    <h3>Source & Commit <span id="g-dirty-chip" style="float:right"></span></h3>
+    <div class="src-grid" id="src-grid">
+      <span class="k">Branch</span><span class="v" id="g-branch"></span>
+      <span class="k">Commit</span><span class="v" id="g-hash"></span>
+      <span class="k">Committer</span><span class="v" id="g-author"></span>
+      <span class="k">E-mail</span><span class="v" id="g-author-email"></span>
+      <span class="k">Committed</span><span class="v" id="g-time"></span>
+      <span class="k">Remote</span><span class="v" id="g-remote"></span>
+      <span class="k">Repo size</span><span class="v" id="g-reposize"></span>
+      <span class="k">Changes</span><span class="v" id="g-changesummary"></span>
     </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px">Message</div>
+    <div id="g-msg" style="font-size:12px;white-space:pre-wrap;background:#0a0f1a;border:1px solid var(--border);border-radius:8px;padding:8px;margin-top:4px;font-family:monospace"></div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px">Changed files <span id="g-files-count"></span></div>
+    <div class="diffstat" id="g-files"></div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px">Recent commits</div>
+    <div id="g-recent"></div>
+    <div style="margin-top:10px;font-size:12px;color:var(--muted)">GenAI Agent: <span id="g-llm" style="color:var(--hpe-teal)"></span></div>
     <h3 style="margin-top:16px">Live Event Stream</h3>
     <div id="stream"></div>
   </div>
@@ -310,15 +403,73 @@ function log(msg, tag){
   d.scrollTop=d.scrollHeight;
 }
 function streamEvent(e){const s=document.getElementById('stream');s.innerHTML+="<div>["+new Date().toLocaleTimeString()+"] "+JSON.stringify(e)+"</div>";}
+// Extract a short, human-readable failure snippet from a raw (GitLab) trace.
+// Strips the timestamp + runner prefix, keeps the meaningful error lines.
+function failSnippet(trace, max){
+  max=max||5;
+  const keywords=/AssertionError|Error:|FAILED|Traceback|Exception|ERROR:|Error\\b|exit code \\d|No module|assert /;
+  const lines=(trace||"").split(String.fromCharCode(10))
+    .map(l=>l.replace(/^\\d{4}-\\d{2}-\\d{2}T[^\\s]+\\s*\\d+[EO]\\s*/,"").trim())
+    .filter(l=>l.length>0);
+  // Prefer lines that look like the actual failure; fall back to the tail.
+  let hits=lines.filter(l=>keywords.test(l));
+  if(hits.length===0) hits=lines.slice(-max);
+  hits=hits.slice(-max);
+  return hits.join(String.fromCharCode(10));
+}
 
-// Git info
+// Git info (enriched: author, remote, diffstat, recent commits, working-tree status)
 fetch('/api/git').then(r=>r.json()).then(g=>{
   document.getElementById('g-branch').textContent=g.branch||'-';
   document.getElementById('g-hash').textContent=g.commit_hash||'-';
-  document.getElementById('g-msg').textContent=g.commit_msg||'-';
-  document.getElementById('g-author').textContent=g.author||'-';
-  document.getElementById('g-time').textContent=g.commit_time||'-';
-  document.getElementById('g-files').innerHTML=(g.files_changed||[]).map(f=>'<div class="source-item">• '+f+'</div>').join('')||'<div class="source-item" style="color:var(--muted)">n/a (not running inside a git checkout)</div>';
+  document.getElementById('g-author').textContent=g.author_name||'-';
+  const emEl=document.getElementById('g-author-email'); if(emEl) emEl.textContent=g.author_email||'-';
+  document.getElementById('g-time').textContent=(g.commit_time||'-').replace('T',' ').slice(0,19)+' UTC';
+  const rm=document.getElementById('g-remote'); if(rm) rm.textContent=g.remote||'-';
+  const rs=document.getElementById('g-reposize');
+  if(rs) rs.textContent=(g.commit_count||0)+' commits';
+  // Dirty / clean working-tree chip
+  const chip=document.getElementById('g-dirty-chip');
+  if(chip){
+    if(g.is_dirty && g.dirty && g.dirty.length){
+      chip.innerHTML='<span class="dirty-chip">'+g.dirty.length+' uncommitted</span>';
+    } else {
+      chip.innerHTML='<span class="clean-chip">clean</span>';
+    }
+  }
+  // Change summary
+  const cs=document.getElementById('g-changesummary');
+  if(cs) cs.innerHTML=(g.files_count||0)+' file(s) · <span style="color:var(--hpe-green)">+'+(g.total_added||0)+'</span> <span style="color:var(--hpe-red)">-'+(g.total_deleted||0)+'</span>';
+  // Full message
+  const msgEl=document.getElementById('g-msg');
+  if(msgEl) msgEl.textContent=(g.full_message||g.commit_msg||'').slice(0,400);
+  // Per-file diffstat
+  const filesEl=document.getElementById('g-files');
+  if(filesEl){
+    const ds=g.diffstat||[];
+    const fc=document.getElementById('g-files-count'); if(fc) fc.textContent='('+(g.files_count||0)+')';
+    if(ds.length===0){ filesEl.innerHTML='<div class="diffstat-row" style="color:var(--muted)">no diff info</div>'; }
+    else{
+      let rows='';
+      ds.forEach(d=>{
+        rows+='<div class="diffstat-row"><span class="ct '+(d.change_type||'M')+'">'+(d.change_type||'M')+'</span>'
+          +'<span class="fp" title="'+d.path+'">'+d.path+'</span>'
+          +'<span class="add">+'+(d.added||0)+'</span><span class="del">-'+(d.deleted||0)+'</span></div>';
+      });
+      rows+='<div class="diffstat-total"><span style="color:var(--hpe-green)">+'+(g.total_added||0)+'</span> '
+        +'<span style="color:var(--hpe-red)">-'+(g.total_deleted||0)+'</span> across '+(g.files_count||0)+' files</div>';
+      filesEl.innerHTML=rows;
+    }
+  }
+  // Recent commits
+  const recentEl=document.getElementById('g-recent');
+  if(recentEl){
+    const rc=g.recent_commits||[];
+    recentEl.innerHTML=rc.length? rc.map(c=>'<div class="mini-commit" title="'+c.time+'">'
+      +'<span style="color:var(--hpe-teal)">'+c.hash+'</span> '+c.msg
+      +'<span style="color:var(--muted)"> · '+c.author+'</span></div>').join('')
+      : '<div style="color:var(--muted);font-size:12px">n/a</div>';
+  }
 });
 
 // GenAI agent provenance — show the audience which LLM is actually answering.
@@ -416,14 +567,18 @@ function pollState(){
     if(intj.status==='failed' && p.id && _analyzedPid!==p.id){
       lastTrace=s.trace||''; window._changed=(s.changed_files||[]);
       _analyzedPid=p.id;
-      log('failed job: '+intj.name+' (pipeline #'+p.id+', ref '+(p.ref||'-')+')','WARN');
-      log('changed files: '+((s.changed_files||[]).join(', ')||'unknown'),'WARN');
-      log('failing trace (tail):\\n'+(lastTrace||'').split('\\n').slice(-6).join('\\n'),'ERR');
-      // pull the full trace from the backend for the debug console
+      const snippet=failSnippet(lastTrace,4);
+      log('INTEGRATION FAILED — job '+intj.name+' (pipeline #'+p.id+', ref '+(p.ref||'-')+', '+(intj.duration?intj.duration.toFixed(1)+'s':'')+')','FAIL');
+      log('files touched by the failing commit: '+((s.changed_files||[]).join(', ')||'unknown'),'WARN');
+      log('failure signature:'+String.fromCharCode(10)+(snippet||'(no trace available)'),'ERR');
+      // pull the full trace and surface just the root-cause lines (no 2000-char dump)
       const failedJob=(s.failed_jobs||[])[0];
       if(failedJob&&failedJob.id){
         fetch('/api/job-trace?job_id='+failedJob.id).then(r=>r.json()).then(t=>{
-          if(t&&t.trace) log('full job trace:\\n'+t.trace.slice(0,2000),'ERR');
+          if(t&&t.trace){
+            const rootCause=failSnippet(t.trace,6);
+            log('root-cause lines (from full trace of job #'+failedJob.id+'):'+String.fromCharCode(10)+rootCause,'ERR');
+          }
         }).catch(()=>{});
       }
       runAI();
@@ -481,11 +636,14 @@ function runAI(){
      if(a._source==='live-llm'){
        badge.textContent='live LLM: '+(a._llm_model||'');
        badge.className='agent-badge live';
-       log('GenAI agent: live LLM '+(a._llm_model||'')+' responded in '+a._llm_latency_ms+'ms (root_cause generated)','AI');
+       log('GenAI: LLM '+(a._llm_model||'')+' generated a fix in '+a._llm_latency_ms+'ms','AI');
+       log('GenAI verdict → root cause: '+(a.root_cause||'').slice(0,160),'AI');
+       log('GenAI verdict → confidence '+(Math.round((a.confidence||0)*100))+'% · risk '+(a.risk_score||0)+'/100 · files: '+((a.files_touched||[]).join(', ')||'n/a'),'AI');
      } else {
-       badge.textContent='offline fallback (LLM down: '+(a._fallback_error||'unreachable').slice(0,40)+')';
+       badge.textContent='fallback (LLM down)';
        badge.className='agent-badge fallback';
-       log('GenAI agent: LLM unreachable — showing curated offline fallback','WARN');
+       log('GenAI: LLM not available — '+(a._fallback_error||'unreachable'),'WARN');
+       log('GenAI: showing curated offline fallback for this scenario','WARN');
      }
      typeText(document.getElementById('ai-reason'),
        'Root cause: '+a.root_cause+'\\n\\nSummary: '+a.summary);

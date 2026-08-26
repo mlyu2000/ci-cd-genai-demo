@@ -63,6 +63,28 @@ def _call_llm(user_msg: str) -> dict:
     return result
 
 
+def _humanize_llm_error(e: Exception) -> str:
+    """Turn a raw exception into a short, actionable message for the UI/debug console."""
+    s = str(e)
+    if "404" in s:
+        return "LLM endpoint not found (HTTP 404) — check LLM_ENDPOINT path"
+    if "401" in s:
+        return "LLM auth rejected (HTTP 401) — check LLM_API_KEY"
+    if "403" in s:
+        return "LLM access denied (HTTP 403)"
+    if "429" in s:
+        return "LLM rate-limited (HTTP 429) — retry shortly"
+    if "Name or service" in s or "resolve" in s or "NameResolution" in s:
+        return "LLM host unreachable (DNS) — check LLM_ENDPOINT hostname"
+    if "Connection" in s or "Max retries" in s:
+        return "LLM host unreachable (connection refused/reset) — is it running?"
+    if "timed out" in s or "Timeout" in s:
+        return "LLM request timed out — model may be overloaded"
+    if "JSONDecodeError" in s or "Expecting value" in s:
+        return "LLM returned non-JSON — model may not honor the JSON contract"
+    return "LLM call failed: " + s[:140]
+
+
 def analyze_failure(job_trace: str, changed_files: list, commit_msg: str = "",
                     file_contents: dict = None, git_diff: str = "",
                     scenario: dict = None) -> dict:
@@ -115,7 +137,7 @@ def analyze_failure(job_trace: str, changed_files: list, commit_msg: str = "",
             }
         else:
             fb = {
-                "root_cause": f"LLM analysis unavailable: {e}",
+                "root_cause": f"LLM unavailable — {_humanize_llm_error(e)}",
                 "reasoning_steps": ["LLM unavailable, fallback to manual review"],
                 "confidence": 0.0,
                 "risk_score": 50,
@@ -131,7 +153,8 @@ def analyze_failure(job_trace: str, changed_files: list, commit_msg: str = "",
         fb["_llm_model"] = LLM_MODEL
         fb["_llm_endpoint"] = LLM_ENDPOINT
         fb["_llm_latency_ms"] = latency
-        fb["_fallback_error"] = str(e)
+        fb["_fallback_error"] = _humanize_llm_error(e)
+        fb["_fallback_raw"] = str(e)[:300]
         return fb
 
 
