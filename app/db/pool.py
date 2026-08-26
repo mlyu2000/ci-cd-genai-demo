@@ -7,10 +7,10 @@ configured number of parallel workers.
 """
 
 # Maximum number of persistent connections the pool keeps open.
-POOL_SIZE = 5
+POOL_SIZE = 6
 
 # Extra connections allowed beyond POOL_SIZE before a worker blocks.
-MAX_OVERFLOW = 0
+MAX_OVERFLOW = 1
 
 # Number of parallel workers the integration test drives the service with.
 EXPECTED_WORKERS = 6
