@@ -85,6 +85,12 @@ make test-integration# integration (RED by design — it is the demo's failure)
 | 6 | (Optional) Autonomous on + re-run | MR merges itself via the GitLab API after green + gates | "With the risk gates passing, the last click is optional. The gates are the governance story." |
 | 7 | Point at KPIs | All `--`/measured, "Reset demo" available | "No fabricated numbers. Everything on screen is either this session or live GitLab. I can reset it live." |
 
+**Re-running after an autonomous merge:** once the auto-fix is *merged*, master's pool config is fixed and the integration test genuinely passes — a new Run Pipeline is green (honest, but nothing left to fix). Restore the failing fixture to demo again:
+```bash
+venv/bin/python scripts/reset_fixture.py   # reverts POOL_SIZE/MAX_OVERFLOW to 5/0 on master (gitlab remote only)
+```
+With **Autonomous off** (default) the MR is never merged, so every "Run Pipeline" re-fails and the demo is repeatable with no reset.
+
 **Consistency guarantees (what the demo never does):**
 - Never inflates KPIs (per-poll counters are gone; releases = real 7-day count).
 - Never claims a fix applied when `git apply` failed (explicit "attached for review").

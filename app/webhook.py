@@ -305,6 +305,71 @@ def get_mr(project_id: int, mr_iid: int) -> dict:
 # --------------------------------------------------------------------------
 # Auto-fix: real patch application + MR + (optional) merge
 # --------------------------------------------------------------------------
+def _fuzzy_apply(patch: str, worktree: str) -> bool:
+    """Tolerant apply for when `git apply` rejects an LLM patch.
+
+    Small models often emit the right +/- lines but wrong context lines, wrong
+    line-number ranges, or a fake `index` hash — so strict `git apply` fails.
+    Here we parse each hunk's -/+ line pairs and rewrite the target file by
+    replacing each removed line with its added line (first occurrence, exact or
+    whitespace-insensitive match). This applies the *semantic* fix to the real
+    file. Returns True if at least one change landed.
+    """
+    import re
+    changed = False
+    cur_file = None
+    removed, added = [], []
+
+    def flush():
+        nonlocal changed, cur_file, removed, added
+        if not cur_file or not removed:
+            removed, added = [], []
+            return
+        fpath = os.path.join(worktree, cur_file)
+        if not os.path.isfile(fpath):
+            removed, added = [], []
+            return
+        with open(fpath, "r") as f:
+            lines = f.readlines()
+        # pair removed[i] -> added[i] where lengths match; else best-effort zip
+        pairs = list(zip(removed, added)) if len(removed) == len(added) else \
+                [(r, a) for r, a in zip(removed, added)]
+        for rline, aline in pairs:
+            rt = rline.rstrip("\n")
+            at = aline.rstrip("\n")
+            if not rt or at == rt:
+                continue
+            rt_s = rt.strip()
+            idx = None
+            for i, ln in enumerate(lines):
+                if ln.rstrip("\n") == rt:  # exact
+                    idx = i; break
+            if idx is None:
+                for i, ln in enumerate(lines):
+                    if ln.strip() == rt_s:  # whitespace-insensitive
+                        idx = i; break
+            if idx is not None:
+                lines[idx] = at + ("\n" if lines[idx].endswith("\n") else "")
+                changed = True
+        with open(fpath, "w") as f:
+            f.writelines(lines)
+        removed, added = [], []
+
+    for raw in patch.splitlines():
+        m = re.match(r"^\+\+\+ b/(.+)$", raw)
+        if m:
+            flush(); cur_file = m.group(1).strip(); continue
+        if raw.startswith("diff --git") or raw.startswith("---") or \
+           raw.startswith("@@") or raw.startswith("index "):
+            continue
+        if raw.startswith("+"):
+            added.append(raw[1:])
+        elif raw.startswith("-"):
+            removed.append(raw[1:])
+    flush()
+    return changed
+
+
 def _git_remote_for_gitlab(repo_path: str) -> str:
     """Pick the git remote that points at our GitLab (not GitHub)."""
     try:
@@ -405,12 +470,23 @@ def create_merge_request(project_id: int, branch: str, title: str, patch: str,
     error = ""
     try:
         # 1. materialize the fix in a clean worktree and push it as a branch
+        log_fuzzy = False
         if patch and repo_path and _local_workdir(repo_path, worktree):
             norm = _normalize_patch(patch, changed_files)
             r = subprocess.run(["git", "apply", "--whitespace=fix", "-"],
                                cwd=worktree, input=norm.encode(),
                                capture_output=True, timeout=60)
-            if r.returncode == 0:
+            if r.returncode != 0:
+                # Tolerant apply: small models mangle context/index lines but the
+                # +/- lines are often the right fix. Apply the semantic change.
+                error = "git apply failed: " + (r.stderr.decode() or "context mismatch")[:300]
+                if _fuzzy_apply(norm, worktree):
+                    log_fuzzy = True
+                else:
+                    error += " (fuzzy apply found no applicable change)"
+            else:
+                log_fuzzy = False
+            if not error or log_fuzzy:
                 subprocess.run(["git", "add", "-A"], cwd=worktree, check=False,
                                capture_output=True, timeout=60)
                 st = subprocess.run(["git", "diff", "--cached", "--name-only"],
@@ -418,7 +494,8 @@ def create_merge_request(project_id: int, branch: str, title: str, patch: str,
                                     timeout=60).stdout.decode().split()
                 if st:
                     files_committed = st
-                    subprocess.run(["git", "commit", "-m", f"fix: {title}"],
+                    commit_msg = f"fix: {title}" + (" (fuzzy-applied)" if log_fuzzy else "")
+                    subprocess.run(["git", "commit", "-m", commit_msg],
                                    cwd=worktree, check=True, capture_output=True,
                                    timeout=60)
                     remote = _git_remote_for_gitlab(repo_path)
@@ -432,8 +509,10 @@ def create_merge_request(project_id: int, branch: str, title: str, patch: str,
                         return {"applied": False, "patch_applied": False,
                                 "error": "git push failed: " + (push_r.stderr.decode() or "")[:300]}
                     applied = True
-            else:
-                error = "git apply failed: " + (r.stderr.decode() or "context mismatch")[:300]
+                    if log_fuzzy:
+                        error = "git apply rejected the exact hunk; change applied via line-level fuzzy match — verify in the MR diff"
+                else:
+                    error = "no file changes resulted from the patch"
 
         # 2. honest fallback: commit the patch as a reviewable file
         if not applied:

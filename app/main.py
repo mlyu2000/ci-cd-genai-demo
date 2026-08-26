@@ -800,13 +800,14 @@ function approveFix(){
     }
   });
 }
-// Real autonomous merge: calls the GitLab merge API (gated by green MR pipeline
-// + risk gates checked at approve time). Never just a log line.
+// Real autonomous merge: calls the GitLab merge API. Server re-checks the MR
+// pipeline is green + risk gate before it will merge (never a log-only stub).
 function autoMerge(pm, pipeline){
   const sha=(pipeline && pipeline.sha) || '';
-  log('Autonomous: MR !'+pm.mr_iid+' pipeline green — calling real GitLab merge API...','INFO');
+  const risk = (window._analysis && window._analysis.risk_score) || 0;
+  log('Autonomous: MR !'+pm.mr_iid+' pipeline green — requesting real GitLab merge (risk '+risk+')...','INFO');
   fetch('/api/merge',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({mr_iid:pm.mr_iid, sha:sha})}).then(r=>r.json()).then(x=>{
+    body:JSON.stringify({mr_iid:pm.mr_iid, sha:sha, risk_score:risk})}).then(r=>r.json()).then(x=>{
     if(x.merged){
       log('MR !'+pm.mr_iid+' MERGED via GitLab API (autonomous, gates passed)','OK');
       document.getElementById('mr-link').innerHTML='✅ MR !'+pm.mr_iid+' MERGED (autonomous)';
@@ -879,10 +880,36 @@ def fix_time():
 
 @app.route("/api/merge", methods=["POST"])
 def merge():
-    """Real autonomous merge via the GitLab API (gates checked client-side)."""
+    """Real autonomous merge via the GitLab API.
+
+    Server-side gate (not just the UI): the MR's latest pipeline MUST be green
+    and the risk gates must have passed (echoed back from the client). A red or
+    unknown pipeline is refused and left open for a human.
+    """
     data = request.get_json(force=True, silent=True) or {}
     mr_iid = int(data.get("mr_iid", 0) or 0)
     project_id = int(os.getenv("GITLAB_PROJECT_ID", "1"))
+    if not mr_iid:
+        return jsonify({"merged": False, "error": "no mr_iid"})
+    # 1. fetch MR + its pipelines
+    mr = webhook.get_mr(project_id, mr_iid)
+    if isinstance(mr, dict) and mr.get("error"):
+        return jsonify({"merged": False, "mr_iid": mr_iid, "error": mr["error"]})
+    if mr.get("state") in ("merged", "closed"):
+        return jsonify({"merged": mr.get("state") == "merged", "mr_iid": mr_iid,
+                        "error": None if mr.get("state") == "merged" else "MR is closed"})
+    pipelines = webhook.api_get(f"projects/{project_id}/merge_requests/{mr_iid}/pipelines",
+                                {"per_page": 1})
+    latest = pipelines[0] if isinstance(pipelines, list) and pipelines else {}
+    pstatus = latest.get("status")
+    if pstatus != "success":
+        return jsonify({"merged": False, "mr_iid": mr_iid, "pipeline_status": pstatus,
+                        "error": f"refusing to merge: MR pipeline is '{pstatus}', not 'success'"})
+    # 2. gates (client checked them at approve time; enforce risk again server-side)
+    risk = int(data.get("risk_score", 101) or 101)
+    if risk > 70:
+        return jsonify({"merged": False, "mr_iid": mr_iid,
+                        "error": f"refusing to merge: risk {risk} exceeds gate 70"})
     res = webhook.merge_merge_request(project_id, mr_iid, data.get("sha", ""))
     merged = bool(res.get("merged") or res.get("state") == "merged"
                   or res.get("state_event") == "merged")
@@ -961,12 +988,18 @@ def analyze():
                 changed_files = [tf] + changed_files
 
     # Gather the failing source file's content (raw) + the commit diff for the agent.
+    # Fetch a broader candidate set (not just the first 3) so the file that
+    # actually produces the error is included; empty fetches (dirs, 404s) drop.
     file_contents = {}
     git_diff = ""
     ref = pipeline.get("sha") or (pipeline.get("ref")) or "master"
     sha = pipeline.get("sha")
     if mode == "real":
-        for cf in changed_files[:3]:
+        seen = set()
+        for cf in (changed_files or [])[:6]:
+            if cf in seen:
+                continue
+            seen.add(cf)
             raw = webhook.get_file_raw(project_id, cf, ref)
             if raw:
                 file_contents[cf] = raw
@@ -987,9 +1020,12 @@ def analyze():
         git_diff=git_diff,
         scenario=scenario_obj,
         stage_context="The failing stage is 'integration'. Its purpose: exercise the payments service "
-                      "under parallel load against a shared DB connection pool (test file: "
-                      "tests/integration/test_integration.py, config: app/db/pool.py). Diagnose the ACTUAL "
-                      "root cause from the trace and the provided source file; do not assume the outcome.",
+                      "under parallel load against a shared DB connection pool. The pool is configured in "
+                      "app/db/pool.py (POOL_SIZE, MAX_OVERFLOW, EXPECTED_WORKERS) and the test asserts "
+                      "effective capacity >= EXPECTED_WORKERS. Diagnose the ACTUAL root cause from the trace "
+                      "and the provided source files; if it is pool exhaustion, the fix is to raise "
+                      "POOL_SIZE/MAX_OVERFLOW in app/db/pool.py (not to edit the test). Do not invent hunks "
+                      "for files you were not given.",
     )
     return jsonify(analysis)
 

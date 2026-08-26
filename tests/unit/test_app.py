@@ -1,10 +1,17 @@
 """Smoke tests for the CI/CD GenAI demo app (run by GitLab CI unit-test stage)."""
 import os
 import sys
+import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app"))
 
 os.environ.setdefault("GITLAB_PROJECT_ID", "1")
+os.environ.setdefault("GITLAB_MODE", "mock")
+
+# Point the webhook DB at a throwaway file BEFORE importing main (which calls
+# webhook.init_db()), so tests never mutate the app's real pipeline_state.db.
+import webhook  # noqa: E402
+webhook.DB_PATH = os.path.join(tempfile.mkdtemp(prefix="demo_test_"), "pipeline_state.db")
 
 from flask import Flask  # noqa: E402
 import main as m  # noqa: E402
@@ -46,6 +53,55 @@ def test_healthz_ok():
     r = c.get("/healthz")
     assert r.status_code == 200
     assert r.get_json()["ok"] is True
+
+
+def test_merge_refuses_red_or_unknown_pipeline(tmp_path):
+    """/api/merge must refuse to merge an MR whose pipeline is not green."""
+    import webhook
+    webhook.DB_PATH = str(tmp_path / "kpis_test.db")
+    webhook.init_db()
+    c = m.app.test_client()
+    r = c.post("/api/merge", json={"mr_iid": 99, "risk_score": 25})
+    body = r.get_json()
+    assert body["merged"] is False
+    assert "refusing to merge" in body["error"]
+
+
+def test_fuzzy_apply_rewrites_real_file(tmp_path):
+    """_fuzzy_apply applies the semantic +/- change even when git apply would
+    reject the hunk (mangled context / index hash — common with small LLMs)."""
+    import webhook
+    workdir = tmp_path / "wt"
+    (workdir / "app" / "db").mkdir(parents=True)
+    (workdir / "app" / "db" / "pool.py").write_text(
+        'POOL_SIZE = 5\nMAX_OVERFLOW = 0\nEXPECTED_WORKERS = 6\n')
+    # exactly the kind of patch qwen3.5-4b emits: real +/- lines, fake index
+    patch = (
+        "diff --git a/app/db/pool.py b/app/db/pool.py\n"
+        "index 1234567..abcdefg 100644\n"
+        "--- a/app/db/pool.py\n"
+        "+++ b/app/db/pool.py\n"
+        "@@ -1,5 +1,5 @@\n"
+        '"""wrong context line"""\n'
+        "\n"
+        "-POOL_SIZE = 5\n"
+        "+POOL_SIZE = 6\n"
+        " MAX_OVERFLOW = 0\n"
+    )
+    assert webhook._fuzzy_apply(patch, str(workdir)) is True
+    content = (workdir / "app" / "db" / "pool.py").read_text()
+    assert "POOL_SIZE = 6" in content
+    assert "MAX_OVERFLOW = 0" in content  # untouched lines preserved
+
+
+def test_fuzzy_apply_noop_when_nothing_matches(tmp_path):
+    import webhook
+    workdir = tmp_path / "wt"
+    workdir.mkdir()
+    (workdir / "x.py").write_text("a = 1\n")
+    patch = "--- a/x.py\n+++ b/x.py\n@@\n-nonexistent line\n+something\n"
+    assert webhook._fuzzy_apply(patch, str(workdir)) is False
+    assert (workdir / "x.py").read_text() == "a = 1\n"
 
 
 def test_served_js_is_syntactically_valid():
