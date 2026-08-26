@@ -85,9 +85,28 @@ def _humanize_llm_error(e: Exception) -> str:
     return "LLM call failed: " + s[:140]
 
 
+def _clean_trace(job_trace: str, limit: int = 9000) -> str:
+    """Strip pip/docker/runner boilerplate from a CI trace so the LLM's context
+    budget goes to the actual test output, and keep the tail (where failures live)."""
+    noise = ("Collecting ", "Downloading ", "Installing collected", "Successfully installed",
+             "Requirement already satisfied", "Using cached ", "Downloading pip",
+             "Running with gitlab-runner", "Cleaning up project directory",
+             "section_start:", "section_end:", "Resolving secrets", "Uploading artifacts",
+             "Preparing workspaces", "Pulling docker image", "Using docker image sha256",
+             "WARNING: pip is configured", "Getting sources for local cache",
+             "WARNING: You are using pip version", "Building wheels for collected packages")
+    kept = []
+    for line in (job_trace or "").splitlines():
+        if any(n in line for n in noise):
+            continue
+        kept.append(line)
+    text = "\n".join(kept).strip()
+    return text[-limit:] if len(text) > limit else text
+
+
 def analyze_failure(job_trace: str, changed_files: list, commit_msg: str = "",
                     file_contents: dict = None, git_diff: str = "",
-                    scenario: dict = None) -> dict:
+                    scenario: dict = None, stage_context: str = "") -> dict:
     """Analyze a failing job. Always calls the LLM first; the scenario (if any)
     provides the failing source files as context and serves as the offline
     fallback only. Returns analysis + provenance metadata."""
@@ -105,9 +124,10 @@ def analyze_failure(job_trace: str, changed_files: list, commit_msg: str = "",
     user_msg = (
         f"Commit message: {commit_msg or 'unknown'}\n"
         f"Changed files: {', '.join(changed_files) or 'unknown'}\n"
-        f"Git diff:{git_diff[:2000] if git_diff else ' (not provided — infer the fix from the code below)'}\n"
+        + (f"Stage description (what this CI stage is designed to test): {stage_context}\n" if stage_context else "")
+        + f"Git diff:{git_diff[:2000] if git_diff else ' (not provided — infer the fix from the code below)'}\n"
         f"File contents (as they existed at the failing commit):{file_context}\n"
-        f"Failing job trace:\n{job_trace[-4000:]}"
+        f"Failing job trace (cleaned, tail kept):\n{_clean_trace(job_trace)}"
     )
 
     t0 = time.time()

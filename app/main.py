@@ -598,8 +598,31 @@ function pollState(){
     }
   });
 }
+function clearRun(){
+  // Reset the UI so a NEW trigger only shows the CURRENT run's details.
+  // AI card
+  document.getElementById('ai-card').style.display='none';
+  document.getElementById('ai-reason').textContent='';
+  ['reasoning-cause','reasoning-steps','reasoning-category','validation-commands',
+   'risk-assessment','baseline-time','baseline-steps','auto-time','time-saved',
+   'gate-status','patch-files','ai-diff'].forEach(id=>{const e=document.getElementById(id); if(e)e.textContent='';});
+  ['g-conf','g-risk','g-gate'].forEach(id=>{const e=document.getElementById(id); if(e){e.textContent='--'; e.style.color='var(--muted)';}});
+  const badge=document.getElementById('agent-badge'); if(badge){badge.textContent='…'; badge.className='agent-badge';}
+  document.getElementById('mr-link').style.display='none';
+  window._analysis=null; window._pendingMR=null;
+  // Flow stages + connectors back to pending
+  ['dot-build','dot-test','dot-int'].forEach(id=>{const e=document.getElementById(id); if(e)e.className='flow-dot';});
+  ['fline-build','fline-test'].forEach(id=>{const e=document.getElementById(id); if(e)e.className='flow-line';});
+  ['build-status','test-status','int-status'].forEach(id=>{const e=document.getElementById(id); if(e){e.textContent='waiting'; e.className='flow-status';}});
+  // Debug console + event stream (previous run's output cleared)
+  const dbg=document.getElementById('debug-log'); if(dbg) dbg.innerHTML='';
+  const st=document.getElementById('stream'); if(st) st.innerHTML='';
+  // Dedupe guards reset so the new run's transitions are detected fresh
+  _analyzedPid=null; _lastEventKey=null; _lastJobSig=null; lastTrace=''; window._changed=[];
+  log('new run requested — previous run details cleared','INFO');
+}
 function runPipeline(){
-  _analyzedPid=null; // new pipeline may need a fresh analysis
+  clearRun();
   fetch('/api/trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:'master'})})
     .then(r=>r.json()).then(x=>{ log('Pipeline triggered: '+JSON.stringify(x).slice(0,200)); startPolling(); });
 }
@@ -793,17 +816,70 @@ def gitlab_webhook():
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     data = request.get_json(force=True, silent=True) or {}
+    project_id = int(os.getenv("GITLAB_PROJECT_ID", "1"))
+    mode = os.getenv("GITLAB_MODE", "real").lower()
     git_info = get_git_info()
-    # In mock mode, pull the curated scenario so the agent runs fully offline.
-    scenario = None
-    if os.getenv("GITLAB_MODE", "real").lower() == "mock":
-        state = webhook.poll_pipeline_state(int(os.getenv("GITLAB_PROJECT_ID", "1")))
-        scenario = state.get("scenario")
+    state = webhook.poll_pipeline_state(project_id)
+    pipeline = state.get("pipeline") or {}
+    failed = (state.get("failed_jobs") or [{}])[0]
+
+    # Full failing-job trace (NOT the 6000-char slice) so the agent sees the real error.
+    trace = ""
+    if failed.get("id"):
+        trace = webhook.get_gitlab_job_trace(project_id, failed["id"])
+    if not trace:
+        trace = state.get("trace") or data.get("trace") or "Integration test failed: random exit 1"
+    if not isinstance(trace, str):
+        trace = str(trace)
+
+    changed_files = list(data.get("changed_files") or git_info.get("files_changed", []) or [])
+    # Prefer the file the failing test actually exercises (the scenario's changed_file /
+    # the file named in the trace), so the agent gets the code that produced the error.
+    scenario = state.get("scenario")
+    if scenario and scenario.get("changed_file"):
+        cf = scenario["changed_file"]
+        changed_files = [cf] + [f for f in changed_files if f != cf]
+    # Real mode: the trace contains the command that ran (e.g. "python -m pytest -q
+    # tests/integration_test.py"). Extract the target file so we fetch the code that
+    # actually failed, not just whatever the last commit touched.
+    if mode == "real":
+        import re as _re
+        m = _re.search(r"pytest\s+-q\s+([\w./_\-]+)", trace) or _re.search(r"pytest\s+([\w./_\-]+)", trace)
+        if m:
+            tf = m.group(1)
+            if tf not in changed_files:
+                changed_files = [tf] + changed_files
+
+    # Gather the failing source file's content (raw) + the commit diff for the agent.
+    file_contents = {}
+    git_diff = ""
+    ref = pipeline.get("sha") or (pipeline.get("ref")) or "master"
+    sha = pipeline.get("sha")
+    if mode == "real":
+        for cf in changed_files[:3]:
+            raw = webhook.get_file_raw(project_id, cf, ref)
+            if raw:
+                file_contents[cf] = raw
+        if sha:
+            git_diff = webhook.get_commit_diff(project_id, sha)
+
+    # In mock mode the scenario supplies the failing source; in real mode we used raw fetch.
+    if mode == "mock":
+        scenario_obj = scenario
+    else:
+        scenario_obj = None
+
     analysis = genai_agent.analyze_failure(
-        job_trace=data.get("trace", "Integration test failed: random exit 1"),
-        changed_files=list(data.get("changed_files") or git_info.get("files_changed", []) or []),
-        commit_msg=git_info.get("commit_msg", ""),
-        scenario=scenario,
+        job_trace=trace,
+        changed_files=changed_files,
+        commit_msg=git_info.get("commit_msg", "") or pipeline.get("ref", ""),
+        file_contents=file_contents,
+        git_diff=git_diff,
+        scenario=scenario_obj,
+        stage_context="The failing stage is 'integration'. Its purpose: exercise the payments service "
+                      "under parallel load against a shared DB connection pool (test file: "
+                      "tests/integration_test.py). Diagnose the ACTUAL root cause from the trace and the "
+                      "provided source file; do not assume the outcome.",
     )
     return jsonify(analysis)
 

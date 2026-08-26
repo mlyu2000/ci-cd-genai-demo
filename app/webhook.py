@@ -160,6 +160,41 @@ def api_post(path: str, data: dict = None):
         return {"error": str(e)}
 
 
+def get_file_raw(project_id: int, path: str, ref: str) -> str:
+    """Raw file content at a given ref — feeds the agent the failing source code."""
+    if _use_mock():
+        return ""
+    if not ref:
+        return ""
+    from urllib.parse import quote
+    try:
+        r = requests.get(
+            f"{GITLAB_URL}/api/v4/projects/{project_id}/repository/files/{quote(path, safe='')}/raw",
+            headers=_headers(), params={"ref": ref}, timeout=30)
+        return r.text if r.ok else ""
+    except Exception:
+        return ""
+
+
+def get_commit_diff(project_id: int, sha: str) -> str:
+    """Unified diff of a commit (GitLab API) as a patch string for the agent."""
+    if _use_mock():
+        return ""
+    if not sha:
+        return ""
+    try:
+        d = api_get(f"projects/{project_id}/repository/commits/{sha}/diff")
+        if not isinstance(d, list) or not d:
+            return ""
+        parts = []
+        for x in d:
+            parts.append(f"diff --git a/{x.get('old_path', '')} b/{x.get('new_path', '')}")
+            parts.append(x.get("diff", ""))
+        return "\n".join(parts)
+    except Exception:
+        return ""
+
+
 def trigger_pipeline(project_id: int, ref: str = "master") -> dict:
     if _use_mock():
         return _mock().trigger_pipeline(project_id, ref)
@@ -198,7 +233,7 @@ def poll_pipeline_state(project_id: int = None):
             except Exception as e:
                 trace = str(e)
         return {"pipeline": p, "jobs": jobs if isinstance(jobs, list) else [],
-                "failed_jobs": failed, "trace": trace[:6000]}
+                "failed_jobs": failed, "trace": trace[-6000:]}
     return {"pipeline": None, "jobs": [], "failed_jobs": [], "trace": ""}
 
 
