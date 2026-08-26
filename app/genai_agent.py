@@ -49,18 +49,28 @@ def _call_llm(user_msg: str) -> dict:
         "response_format": {"type": "json_object"},
     }
     headers = {"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"}
-    r = requests.post(f"{LLM_ENDPOINT}/chat/completions", json=payload, headers=headers,
-                      timeout=120, verify=SSL_CA_CERT or True)
-    r.raise_for_status()
-    content = r.json()["choices"][0]["message"]["content"]
-    # Strip any <think>...</think> reasoning blocks some models emit, then parse JSON.
-    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-    result = json.loads(content)
-    for k, v in (("reasoning_steps", []), ("validation_commands", []),
-                 ("failure_category", "unknown"), ("manual_triage_minutes", 45),
-                 ("auto_triage_minutes", 5)):
-        result.setdefault(k, v)
-    return result
+    url = f"{LLM_ENDPOINT}/chat/completions"
+    # Retry on 429 (rate limit) and 5xx (transient). Not on 4xx (real errors).
+    last_err = None
+    for attempt in range(3):
+        r = requests.post(url, json=payload, headers=headers,
+                          timeout=120, verify=SSL_CA_CERT or True)
+        if r.status_code == 429 or 500 <= r.status_code < 600:
+            last_err = Exception(f"{r.status_code} {r.text[:120]}")
+            time.sleep(2 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"]
+        # Strip any <think>...</think> reasoning blocks some models emit, then parse JSON.
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        result = json.loads(content)
+        for k, v in (("reasoning_steps", []), ("validation_commands", []),
+                     ("failure_category", "unknown"), ("manual_triage_minutes", 45),
+                     ("auto_triage_minutes", 5)):
+            result.setdefault(k, v)
+        return result
+    # exhausted retries
+    raise Exception(f"LLM request failed after retries: {last_err}")
 
 
 def _humanize_llm_error(e: Exception) -> str:

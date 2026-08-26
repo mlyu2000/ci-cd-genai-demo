@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import requests
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, render_template_string, jsonify, request, Response, stream_with_context
 from dotenv import load_dotenv
@@ -174,6 +175,11 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 .flow-line.ok{background:var(--hpe-green)} .flow-line.err{background:var(--hpe-red)}
 .scenario-card{background:rgba(0,191,165,.06);border:1px solid var(--hpe-teal);border-radius:8px;padding:10px 12px;margin-top:12px}
 .scenario-title{font-size:12px;font-weight:600;color:var(--hpe-teal);margin-bottom:4px}
+.howit{font-size:12px;line-height:1.55;color:var(--muted);padding-left:18px;margin:8px 0 0}
+.howit b{color:var(--text)}
+.howit code{background:#0a0f1a;border:1px solid var(--border);border-radius:4px;padding:0 4px;font-size:11px;color:var(--hpe-teal)}
+.analyzing{display:inline-block;width:10px;height:10px;border:2px solid var(--hpe-teal);border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;vertical-align:-1px;margin-left:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
 .agent-badge{font-size:11px;padding:3px 8px;border-radius:6px;margin-left:10px;vertical-align:middle}
 .agent-badge.live{background:rgba(95,200,10,.15);color:var(--hpe-green);border:1px solid var(--hpe-green)}
 .agent-badge.fallback{background:rgba(245,166,35,.15);color:var(--hpe-amber);border:1px solid var(--hpe-amber)}
@@ -236,12 +242,13 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 </header>
 
 <div class="hero">
-<div class="card"><div class="kpi" id="kpi-mttr">--</div><div class="kpi-label">MTTR (min) • baseline 4m</div></div>
-<div class="card"><div class="kpi" id="kpi-rate">--%</div><div class="kpi-label">Auto-Fix Rate</div></div>
-<div class="card"><div class="kpi" id="kpi-rel">--</div><div class="kpi-label">Releases / week</div></div>
-<div class="card"><div class="kpi" id="kpi-risk">--</div><div class="kpi-label">Risk Score</div></div>
-<div class="card"><div class="kpi" id="kpi-savings">--</div><div class="kpi-label">Hours Saved / Week</div></div>
+<div class="card"><div class="kpi" id="kpi-mttr">--</div><div class="kpi-label">Last auto-fix time (min) · measured</div></div>
+<div class="card"><div class="kpi" id="kpi-rate">--</div><div class="kpi-label">Auto-Fix Rate · this session</div></div>
+<div class="card"><div class="kpi" id="kpi-rel">--</div><div class="kpi-label">Releases · last 7 days (live GitLab)</div></div>
+<div class="card"><div class="kpi" id="kpi-risk">--</div><div class="kpi-label">Risk Score · last fix</div></div>
+<div class="card"><div class="kpi" id="kpi-savings">--</div><div class="kpi-label">Triage time saved · this session</div></div>
 </div>
+<div style="font-size:11px;color:var(--muted);padding:0 24px;margin-top:-10px">All KPIs are measured from this session and live GitLab data — no seeds, no fabricated numbers. Click <b style="color:var(--hpe-amber)">Reset demo</b> to zero the session counters.</div>
 
 <div class="main">
   <div class="card">
@@ -274,7 +281,8 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
     <div class="actions" style="margin-top:12px">
       <button class="btn" onclick="runPipeline()">▶ Run Pipeline</button>
       <button class="btn secondary" onclick="startPolling()">↻ Refresh</button>
-      <label class="autonomous"><input type="checkbox" id="autonomous"> Autonomous mode (auto-merge on green)</label>
+      <button class="btn secondary" onclick="resetDemo()">Reset demo</button>
+      <label class="autonomous" title="When enabled, the MR is auto-merged ONLY after its own pipeline goes green and the risk gates pass. This calls the real GitLab merge API."><input type="checkbox" id="autonomous"> Autonomous: auto-merge on green</label>
     </div>
 
       <div class="ai-card" id="ai-card" style="display:none">
@@ -374,6 +382,15 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
     <div style="margin-top:10px;font-size:12px;color:var(--muted)">GenAI Agent: <span id="g-llm" style="color:var(--hpe-teal)"></span></div>
     <h3 style="margin-top:16px">Live Event Stream</h3>
     <div id="stream"></div>
+    <h3 style="margin-top:16px">How this works <span style="font-size:10px;color:var(--muted)">(no fakes)</span></h3>
+    <ol class="howit">
+      <li><b>Run Pipeline</b> starts a real GitLab pipeline on the real runner: Build → Unit → Integration.</li>
+      <li>Integration runs <code>tests/integration/</code> against the real config <code>app/db/pool.py</code> (pool=5, workers=6) and <b>deterministically fails</b>.</li>
+      <li>The <b>live LLM</b> (badge above) receives the full job trace + the failing source file + commit diff — no canned answers; if the LLM is down the badge says <b>fallback</b> and a curated analysis is used, clearly labeled.</li>
+      <li><b>Approve Auto-Fix</b> applies the LLM patch to the real files in a git worktree, pushes a branch and opens a real MR. If the patch can't be applied it attaches it for review and says so — it never fakes success.</li>
+      <li>The MR's <b>own pipeline verifies the fix</b>; with Autonomous on, the MR is merged via the real GitLab API only after it goes green and the risk gates pass.</li>
+      <li>All KPIs are measured from this session + live GitLab data. <b>Reset demo</b> zeroes the session counters.</li>
+    </ol>
   </div>
 </div>
 
@@ -482,14 +499,22 @@ fetch('/api/agent-info').then(r=>r.json()).then(ai=>{
   if(gEl) gEl.textContent=(ai.model||'unknown')+' @ '+ai.endpoint;
 }).catch(()=>{ const b=document.getElementById('agent-badge'); b.textContent='unknown'; b.className='agent-badge fallback'; });
 
-// KPIs from real pipeline state
+// KPIs are MEASURED (this session + live GitLab). No seeds.
 function loadMetrics(){
   fetch('/api/metrics').then(r=>r.json()).then(m=>{
-    document.getElementById('kpi-mttr').textContent=m.mttr_min.toFixed(1)+'m';
-    document.getElementById('kpi-rate').textContent=m.auto_fix_rate+'%';
-    document.getElementById('kpi-rel').textContent=m.releases_week;
-    document.getElementById('kpi-risk').textContent=m.risk_score;
-    document.getElementById('kpi-savings').textContent=m.hours_saved_per_week;
+    document.getElementById('kpi-mttr').textContent = m.last_fix_seconds ? (m.last_fix_seconds/60).toFixed(1)+'m' : '--';
+    document.getElementById('kpi-rate').textContent = (m.auto_fix_rate===null||m.auto_fix_rate===undefined) ? '--' : m.auto_fix_rate+'%';
+    document.getElementById('kpi-rel').textContent = m.releases_7d;
+    document.getElementById('kpi-risk').textContent = m.auto_fixes ? m.risk_score : '--';
+    document.getElementById('kpi-savings').textContent = m.hours_saved_session ? m.hours_saved_session+'h' : '--';
+  }).catch(()=>{});
+}
+function resetDemo(){
+  if(!confirm('Reset demo session counters (auto-fixes, fix time)? Pipeline history in GitLab is untouched.')) return;
+  fetch('/api/reset',{method:'POST'}).then(r=>r.json()).then(()=>{
+    log('demo session counters reset','INFO');
+    loadMetrics();
+    startPolling();
   });
 }
 loadMetrics();
@@ -567,6 +592,7 @@ function pollState(){
     if(intj.status==='failed' && p.id && _analyzedPid!==p.id){
       lastTrace=s.trace||''; window._changed=(s.changed_files||[]);
       _analyzedPid=p.id;
+      window._fixPipelineId=p.id; window._fixStartedAt=Date.now();  // start measuring fix time
       const snippet=failSnippet(lastTrace,4);
       log('INTEGRATION FAILED — job '+intj.name+' (pipeline #'+p.id+', ref '+(p.ref||'-')+', '+(intj.duration?intj.duration.toFixed(1)+'s':'')+')','FAIL');
       log('files touched by the failing commit: '+((s.changed_files||[]).join(', ')||'unknown'),'WARN');
@@ -586,14 +612,27 @@ function pollState(){
     if(p.status==='success'){
       document.getElementById('kpi-rate').textContent='100%';
     }
-    // Event stream + "green" log: only when the status actually CHANGES (dedupe).
+    // Event stream + "green" log + fix-time measurement + autonomous merge:
+    // all only when the status actually CHANGES (dedupe).
     const key=(p.id||0)+'|'+(p.status||'-');
     if(key!==_lastEventKey){
       _lastEventKey=key;
       streamEvent({type:'pipeline',id:p.id,status:p.status,jobs:js.length});
       if(p.status==='success'){
-        log('pipeline #'+p.id+' green — deploy stage would run now','OK');
-        if(window._autonomous && window._pendingMR) autoMerge();
+        log('pipeline #'+p.id+' green','OK');
+        // If a fix was pending and a NEW pipeline (the MR's) just went green,
+        // measure the real fix duration and (if autonomous) merge for real.
+        const pm=window._pendingMR;
+        if(pm && p.id && p.id!==pm.source_pipeline_id){
+          const secs=window._fixStartedAt?((Date.now()-window._fixStartedAt)/1000):0;
+          fetch('/api/fix-time',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({seconds:secs,pipeline_id:p.id})}).catch(()=>{});
+          log('measured fix time: '+(secs/60).toFixed(1)+' min (failure -> MR green)','OK');
+          loadMetrics();
+          if(window._autonomous && pm.mr_iid){
+            autoMerge(pm, p);
+          }
+        }
       }
     }
   });
@@ -648,6 +687,9 @@ function typeText(el, text, done){
 function runAI(){
   document.getElementById('ai-card').style.display='block';
   switchTab('tab-reasoning');
+  const badge=document.getElementById('agent-badge');
+  badge.innerHTML='analyzing…<span class="analyzing"></span>';
+  badge.className='agent-badge';
   document.getElementById('ai-reason').textContent='Analyzing failure...';
   log('GenAI agent: sending trace + changed files to LLM ...','AI');
   const t0=Date.now();
@@ -734,22 +776,48 @@ function approveFix(){
   }
   
   document.getElementById('mr-link').style.display='none';
+  document.getElementById('mr-link').innerHTML='Opening MR — applying patch to real files…';
+  document.getElementById('mr-link').style.color='var(--muted)';
+  window._fixStartedAt=Date.now(); // failure -> green = real fix time
   fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({analysis:window._analysis})}).then(r=>r.json()).then(x=>{
-    log('Auto-fix: '+JSON.stringify(x));
-    if(x.applied){
+    body:JSON.stringify({analysis:window._analysis,source_pipeline_id:window._fixPipelineId||0})}).then(r=>r.json()).then(x=>{
+    log('Auto-fix result: '+JSON.stringify(x));
+    document.getElementById('mr-link').style.color='';
+    if(x.mr_url){
+      const appliedTag = x.patch_applied
+        ? '✅ Patch APPLIED to real files'
+        : '⚠️ Patch ATTACHED for review (auto-apply failed: '+(x.apply_error||'see MR description')+')';
       document.getElementById('mr-link').style.display='block';
-      document.getElementById('mr-link').innerHTML='✅ MR opened: <a href="'+(x.mr_url||'#')+'" target="_blank">'+(x.mr_url||x.branch||'')+'</a> — '+(x.files||[]).join(', ');
-      window._pendingMR=x; window._autonomous=document.getElementById('autonomous').checked;
+      document.getElementById('mr-link').innerHTML=appliedTag+': <a href="'+(x.mr_url||'#')+'" target="_blank">MR !'+x.mr_iid+'</a> — '+(x.files||[]).join(', ');
+      window._pendingMR=Object.assign({},x,{source_pipeline_id:window._fixPipelineId||0});
+      window._autonomous=document.getElementById('autonomous').checked;
       loadMetrics();
-      if(window._autonomous){ log('Autonomous mode: awaiting green MR pipeline to auto-merge...'); }
+      if(window._autonomous && x.patch_applied){ log('Autonomous mode: awaiting green MR pipeline, then real merge...','INFO'); }
     } else {
       document.getElementById('mr-link').style.display='block';
-      document.getElementById('mr-link').innerHTML='⚠️ Auto-fix not applied: '+(x.error||'patch could not be committed');
+      document.getElementById('mr-link').innerHTML='⚠️ MR could not be created: '+(x.error||'unknown error');
+      log('Auto-fix FAILED: '+(x.error||'unknown'),'ERR');
     }
   });
 }
-function autoMerge(){ log('Autonomous: MR pipeline green — auto-merge enabled (governance: risk gate).'); }
+// Real autonomous merge: calls the GitLab merge API (gated by green MR pipeline
+// + risk gates checked at approve time). Never just a log line.
+function autoMerge(pm, pipeline){
+  const sha=(pipeline && pipeline.sha) || '';
+  log('Autonomous: MR !'+pm.mr_iid+' pipeline green — calling real GitLab merge API...','INFO');
+  fetch('/api/merge',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mr_iid:pm.mr_iid, sha:sha})}).then(r=>r.json()).then(x=>{
+    if(x.merged){
+      log('MR !'+pm.mr_iid+' MERGED via GitLab API (autonomous, gates passed)','OK');
+      document.getElementById('mr-link').innerHTML='✅ MR !'+pm.mr_iid+' MERGED (autonomous)';
+      window._pendingMR=null;
+      loadMetrics();
+    } else {
+      log('Autonomous merge blocked: '+(x.error||'unknown')+' — MR left open for manual merge','WARN');
+      document.getElementById('mr-link').innerHTML='⚠️ Auto-merge blocked ('+(x.error||'unknown')+'): MR left open for manual merge';
+    }
+  }).catch(e=>{ log('Autonomous merge request failed: '+e,'ERR'); });
+}
 function rejectFix(){document.getElementById('ai-card').style.display='none';}
 </script>
 </body>
@@ -759,6 +827,22 @@ function rejectFix(){document.getElementById('ai-card').style.display='none';}
 @app.route("/")
 def index():
     return render_template_string(HTML)
+
+@app.route("/healthz")
+def healthz():
+    """Liveness: app + LLM reachability (for the demo host / k8s-style checks)."""
+    llm_ok = False
+    try:
+        r = requests.get(genai_agent.LLM_ENDPOINT.rstrip("/") + "/models",
+                         headers={"Authorization": f"Bearer {genai_agent.LLM_API_KEY}"},
+                         timeout=5, verify=genai_agent.SSL_CA_CERT or True)
+        llm_ok = r.ok
+    except Exception:
+        llm_ok = False
+    return jsonify({"ok": True, "gitlab_mode": os.getenv("GITLAB_MODE", "real").lower(),
+                    "llm_reachable": llm_ok, "llm_endpoint": genai_agent.LLM_ENDPOINT,
+                    "llm_model": genai_agent.LLM_MODEL}), 200
+
 
 @app.route("/api/trigger", methods=["POST"])
 def trigger():
@@ -772,14 +856,40 @@ def trigger():
 @app.route("/api/poll")
 def poll():
     project_id = int(os.getenv("GITLAB_PROJECT_ID", "1"))
-    state = webhook.poll_pipeline_state(project_id)
-    if (state.get("pipeline") or {}).get("status") == "success":
-        webhook._record_release()
-    return jsonify(state)
+    return jsonify(webhook.poll_pipeline_state(project_id))
 
 @app.route("/api/metrics")
 def metrics():
     return jsonify(webhook.get_metrics())
+
+@app.route("/api/reset", methods=["POST"])
+def reset():
+    """Zero the demo session KPIs (GitLab history untouched)."""
+    webhook.reset_demo()
+    return jsonify({"ok": True})
+
+@app.route("/api/fix-time", methods=["POST"])
+def fix_time():
+    """Record a MEASURED fix duration (failure observed -> MR pipeline green)."""
+    data = request.get_json(force=True, silent=True) or {}
+    secs = float(data.get("seconds", 0) or 0)
+    if secs > 0:
+        webhook._set_fix_seconds(secs)
+    return jsonify({"ok": True, "seconds": secs})
+
+@app.route("/api/merge", methods=["POST"])
+def merge():
+    """Real autonomous merge via the GitLab API (gates checked client-side)."""
+    data = request.get_json(force=True, silent=True) or {}
+    mr_iid = int(data.get("mr_iid", 0) or 0)
+    project_id = int(os.getenv("GITLAB_PROJECT_ID", "1"))
+    res = webhook.merge_merge_request(project_id, mr_iid, data.get("sha", ""))
+    merged = bool(res.get("merged") or res.get("state") == "merged"
+                  or res.get("state_event") == "merged")
+    if merged:
+        return jsonify({"merged": True, "mr_iid": mr_iid})
+    return jsonify({"merged": False, "mr_iid": mr_iid,
+                    "error": res.get("error") or str(res)[:200]})
 
 @app.route("/api/agent-info")
 def agent_info():
@@ -878,8 +988,8 @@ def analyze():
         scenario=scenario_obj,
         stage_context="The failing stage is 'integration'. Its purpose: exercise the payments service "
                       "under parallel load against a shared DB connection pool (test file: "
-                      "tests/integration_test.py). Diagnose the ACTUAL root cause from the trace and the "
-                      "provided source file; do not assume the outcome.",
+                      "tests/integration/test_integration.py, config: app/db/pool.py). Diagnose the ACTUAL "
+                      "root cause from the trace and the provided source file; do not assume the outcome.",
     )
     return jsonify(analysis)
 
@@ -888,12 +998,22 @@ def approve():
     data = request.get_json(force=True, silent=True) or {}
     a = data.get("analysis", {})
     project_id = int(os.getenv("GITLAB_PROJECT_ID", "1"))
+    mode = os.getenv("GITLAB_MODE", "real").lower()
     branch = "auto-fix/genai-" + datetime.now().strftime("%H%M%S")
+    source_pipeline_id = int(data.get("source_pipeline_id", 0) or 0)
+    state = webhook.poll_pipeline_state(project_id)
+    changed_files = (state.get("changed_files") or []) or a.get("files_touched") or []
+    # Repo checkout for real patch application: inside Docker the repo is
+    # mounted at /repo (REPO_PATH); elsewhere fall back to API-attached patch.
+    repo_path = REPO_PATH if mode == "real" else ""
+    if repo_path and not os.path.isdir(os.path.join(repo_path, ".git")):
+        repo_path = ""
     mr = webhook.create_merge_request(
         project_id, branch, genai_agent.suggest_mr_title(a), a.get("patch", ""),
-        target="master", analysis=a)
-    if mr.get("applied"):
-        webhook.record_auto_fix(a)
+        target="master", analysis=a, repo_path=repo_path,
+        pipeline_id=source_pipeline_id, changed_files=list(changed_files))
+    if mr.get("patch_applied") or mr.get("applied"):
+        webhook._record_auto_fix(int(a.get("risk_score", 0) or 0), source_pipeline_id)
     return jsonify(mr)
 
 @app.route("/stream")

@@ -110,6 +110,7 @@ def create_merge_request(pid, branch: str, title: str, patch: str, target: str =
         "mr_iid": mr["iid"],
         "branch": branch,
         "applied": True,
+        "patch_applied": True,
         "files": files,
         "title": title,
     }

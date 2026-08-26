@@ -20,7 +20,7 @@ build:
   image: $CI_IMAGE
   script:
     - echo "Validating application image build context..."
-    - python -m py_compile app/*.py
+    - python -m compileall -q app/
     - echo "Syntax OK; (docker build of demo image is exercised by the GenAI app container itself)"
   artifacts:
     paths:
@@ -34,12 +34,12 @@ unit-test:
   script:
     - echo "Running unit tests..."
     - pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir pytest
-    - python -m pytest -q tests/test_app.py
+    - python -m pytest -q tests/unit
   allow_failure: false
 
-# Integration tests: REAL tests (tests/integration_test.py) that deterministically
-# fail in this demo repo — they assert a 6-worker load against a 5-connection DB
-# pool, mirroring the "DB pool exhaustion" scenario the GenAI agent auto-fixes.
+# Integration tests: REAL tests (tests/integration/test_integration.py) that
+# deterministically fail in this demo repo — they assert the payments service
+# serves 6 parallel workers against a 5-connection DB pool (app/db/pool.py).
 # This is the failure the demo showcases; it is NOT a coin flip.
 integration-test:
   stage: integration
@@ -47,7 +47,7 @@ integration-test:
   script:
     - echo "Running integration tests (payments service under load)..."
     - pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir pytest
-    - python -m pytest -q tests/integration_test.py
+    - python -m pytest -q tests/integration
   allow_failure: false
 
 deploy:
