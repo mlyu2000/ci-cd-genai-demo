@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import time
@@ -46,7 +47,7 @@ def get_git_info():
                     "author_name": "n/a", "author_email": "n/a",
                     "commit_time": "n/a", "files_changed": [], "diffstat": [],
                     "total_added": 0, "total_deleted": 0, "files_count": 0,
-                    "dirty": [], "recent_commits": [], "remote": "n/a",
+                    "dirty": [], "recent_commits": [], "remote": "n/a", "remote_name": "gitlab",
                     "commit_count": 0, "full_message": "n/a"}
         repo = git.Repo(REPO_PATH)
         try:
@@ -97,12 +98,32 @@ def get_git_info():
                            "author": c.author.name,
                            "time": datetime.fromtimestamp(c.committed_date).isoformat()})
 
-        # Primary remote.
+        # Primary remote = the DEMO source (GitLab), not the mirror. Pick the
+        # remote whose URL matches GITLAB_URL; mask any embedded credentials.
         remote = "n/a"
+        remote_name = "gitlab"
+
+        def _host(u: str) -> str:
+            # strip scheme + userinfo (creds) -> bare host[:port]
+            h = u.split("//")[-1].split("/")[0]
+            return h.split("@")[-1]
+
         try:
-            if repo.remotes:
-                r = repo.remotes[0]
-                remote = (r.url or "n/a").replace("https://", "")
+            glab_host = _host(os.getenv("GITLAB_URL", "") or "")
+            chosen = None
+            for r in repo.remotes:
+                url = r.url or ""
+                if glab_host and _host(url) == glab_host:
+                    chosen = url
+                    remote_name = r.name
+                    break
+            if chosen is None and repo.remotes:
+                chosen = (repo.remotes[0].url or "n/a")
+            if chosen:
+                # strip scheme+creds and any token from the displayed URL
+                shown = re.sub(r"://[^@/]+@", "://", chosen)
+                shown = re.sub(r"(glpat-|oauth2:)[A-Za-z0-9_-]+", r"\1****", shown)
+                remote = shown
         except Exception:
             remote = "n/a"
 
@@ -126,6 +147,7 @@ def get_git_info():
             "is_dirty": len(dirty) > 0,
             "recent_commits": recent,
             "remote": remote,
+            "remote_name": remote_name,
             "commit_count": len(list(repo.iter_commits())),
         }
     except Exception as e:
@@ -133,7 +155,7 @@ def get_git_info():
                 "commit_msg": "n/a", "author": "n/a", "author_name": "n/a",
                 "author_email": "n/a", "commit_time": "n/a", "files_changed": [],
                 "diffstat": [], "total_added": 0, "total_deleted": 0, "files_count": 0,
-                "dirty": [], "recent_commits": [], "remote": "n/a",
+                "dirty": [], "recent_commits": [], "remote": "n/a", "remote_name": "gitlab",
                 "commit_count": 0, "full_message": "n/a"}
 
 HTML = """
@@ -369,7 +391,7 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
       <span class="k">Committer</span><span class="v" id="g-author"></span>
       <span class="k">E-mail</span><span class="v" id="g-author-email"></span>
       <span class="k">Committed</span><span class="v" id="g-time"></span>
-      <span class="k">Remote</span><span class="v" id="g-remote"></span>
+      <span class="k">Source</span><span class="v" id="g-remote"></span>
       <span class="k">Repo size</span><span class="v" id="g-reposize"></span>
       <span class="k">Changes</span><span class="v" id="g-changesummary"></span>
     </div>
@@ -442,7 +464,8 @@ fetch('/api/git').then(r=>r.json()).then(g=>{
   document.getElementById('g-author').textContent=g.author_name||'-';
   const emEl=document.getElementById('g-author-email'); if(emEl) emEl.textContent=g.author_email||'-';
   document.getElementById('g-time').textContent=(g.commit_time||'-').replace('T',' ').slice(0,19)+' UTC';
-  const rm=document.getElementById('g-remote'); if(rm) rm.textContent=g.remote||'-';
+  const rm=document.getElementById('g-remote');
+  if(rm) rm.textContent=(g.remote_name==='gitlab'?'GitLab — ':'')+(g.remote||'-');
   const rs=document.getElementById('g-reposize');
   if(rs) rs.textContent=(g.commit_count||0)+' commits';
   // Dirty / clean working-tree chip
