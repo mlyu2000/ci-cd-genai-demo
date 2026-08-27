@@ -172,7 +172,9 @@ HTML = """
 }
 html[data-theme="light"]{
   --bg:#f3f5f7; --card:#ffffff; --muted:#5a6b7b; --text:#16202b; --border:#d6dee6;
+  --code-bg:#eef2f6; --code-fg:#16202b; --add-fg:#1e7a06; --del-fg:#b0003a; --info-fg:#0060a9;
 }
+:root{--code-bg:#0a0f1a; --code-fg:#c9d6e2; --add-fg:#9bff5a; --del-fg:#ff7a96; --info-fg:#6cb8ff}
 *{box-sizing:border-box}
 body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
 header{padding:14px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
@@ -199,7 +201,7 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 .scenario-title{font-size:12px;font-weight:600;color:var(--hpe-teal);margin-bottom:4px}
 .howit{font-size:12px;line-height:1.55;color:var(--muted);padding-left:18px;margin:8px 0 0}
 .howit b{color:var(--text)}
-.howit code{background:#0a0f1a;border:1px solid var(--border);border-radius:4px;padding:0 4px;font-size:11px;color:var(--hpe-teal)}
+.howit code{background:var(--code-bg);border:1px solid var(--border);border-radius:4px;padding:0 4px;font-size:11px;color:var(--hpe-teal)}
 .analyzing{display:inline-block;width:10px;height:10px;border:2px solid var(--hpe-teal);border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;vertical-align:-1px;margin-left:8px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .agent-badge{font-size:11px;padding:3px 8px;border-radius:6px;margin-left:10px;vertical-align:middle}
@@ -208,13 +210,14 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .badge{padding:2px 8px;border-radius:6px;font-size:11px;background:var(--border);color:var(--muted)}
 .ai-card{background:linear-gradient(135deg,#10202e,#0c1a26);border:1px solid var(--hpe-teal);border-radius:12px;padding:16px;margin-top:14px}
+html[data-theme="light"] .ai-card{background:linear-gradient(135deg,#e6f7f4,#f2fbf9)}
 .ai-card h4{margin:0 0 8px;color:var(--hpe-teal)}
-.diff{background:#0a0f1a;border:1px solid var(--border);border-radius:8px;padding:10px;font-family:monospace;font-size:12px;white-space:pre-wrap;color:#c9d6e2;max-height:220px;overflow:auto}
-.diff .add{background:rgba(95,200,10,.15);color:#9bff5a;display:block}
-.diff .del{background:rgba(227,37,75,.15);color:#ff7a96;display:block}
+.diff{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:monospace;font-size:12px;white-space:pre-wrap;color:var(--code-fg);max-height:220px;overflow:auto}
+.diff .add{background:rgba(95,200,10,.15);color:var(--add-fg);display:block}
+.diff .del{background:rgba(227,37,75,.15);color:var(--del-fg);display:block}
 .diff .meta{color:var(--hpe-amber);display:block}
 .metric-row{display:flex;gap:12px;margin:4px 0 0;flex-wrap:wrap}
-.metric-card{flex:1;min-width:130px;background:#0a0f1a;border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+.metric-card{flex:1;min-width:130px;background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
 .metric-value{font-size:24px;font-weight:700;line-height:1.1}
 .metric-label{font-size:11px;color:var(--muted);margin-top:4px}
 .btn{background:var(--hpe-blue);border:none;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;margin-right:8px}
@@ -228,7 +231,7 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 .diffstat-row{display:flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;border-bottom:1px solid var(--border);font-family:monospace}
 .diffstat-row:last-child{border-bottom:none}
 .diffstat-row .ct{width:16px;height:16px;border-radius:4px;font-size:10px;font-weight:700;display:inline-flex;align-items:center;justify-content:center}
-.ct.M{background:rgba(0,120,212,.2);color:#6cb8ff}.ct.A{background:rgba(95,200,10,.2);color:var(--hpe-green)}
+.ct.M{background:rgba(0,120,212,.2);color:var(--info-fg)}.ct.A{background:rgba(95,200,10,.2);color:var(--hpe-green)}
 .ct.D{background:rgba(227,37,75,.2);color:var(--hpe-red)}.ct.R{background:rgba(245,166,35,.2);color:var(--hpe-amber)}
 .diffstat-row .fp{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .diffstat-row .add{color:var(--hpe-green);min-width:44px;text-align:right}
@@ -240,10 +243,10 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
 .clean-chip{display:inline-block;background:rgba(95,200,10,.18);color:var(--hpe-green);border-radius:5px;padding:1px 6px;font-size:10px}
 .debug-console{margin-top:14px}
 .debug-header{display:flex;justify-content:space-between;align-items:center}
-.debug-content{max-height:260px;overflow:auto;background:#0a0f1a;border:1px solid var(--border);border-radius:8px;padding:8px;font-family:monospace;font-size:12px;color:#c5d0e0}
-.dbg-line{padding:2px 0;border-bottom:1px dashed rgba(255,255,255,.04)}
+.debug-content{max-height:260px;overflow:auto;background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:monospace;font-size:12px;color:var(--code-fg)}
+.dbg-line{padding:2px 0;border-bottom:1px dashed var(--border)}
 .dbg-line .dbg-tag{display:inline-block;min-width:56px;font-weight:700;font-size:10px;padding:0 5px;border-radius:4px;text-align:center;margin-right:6px;vertical-align:top}
-.dbg-tag.info{background:rgba(0,120,212,.2);color:#6cb8ff}
+.dbg-tag.info{background:rgba(0,120,212,.2);color:var(--info-fg)}
 .dbg-tag.ok{background:rgba(95,200,10,.2);color:var(--hpe-green)}
 .dbg-tag.warn{background:rgba(245,166,35,.2);color:var(--hpe-amber)}
 .dbg-tag.err{background:rgba(227,37,75,.2);color:var(--hpe-red)}
@@ -396,7 +399,7 @@ nav a{color:var(--muted);margin:0 12px;text-decoration:none}
       <span class="k">Changes</span><span class="v" id="g-changesummary"></span>
     </div>
     <div style="font-size:12px;color:var(--muted);margin-top:8px">Message</div>
-    <div id="g-msg" style="font-size:12px;white-space:pre-wrap;background:#0a0f1a;border:1px solid var(--border);border-radius:8px;padding:8px;margin-top:4px;font-family:monospace"></div>
+    <div id="g-msg" style="font-size:12px;white-space:pre-wrap;background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:8px;margin-top:4px;font-family:monospace"></div>
     <div style="font-size:12px;color:var(--muted);margin-top:8px">Changed files <span id="g-files-count"></span></div>
     <div class="diffstat" id="g-files"></div>
     <div style="font-size:12px;color:var(--muted);margin-top:8px">Recent commits</div>
