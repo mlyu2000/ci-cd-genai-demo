@@ -55,8 +55,9 @@ def test_healthz_ok():
     assert r.get_json()["ok"] is True
 
 
-def test_merge_refuses_red_or_unknown_pipeline(tmp_path):
+def test_merge_refuses_red_or_unknown_pipeline(tmp_path, monkeypatch):
     """/api/merge must refuse to merge an MR whose pipeline is not green."""
+    monkeypatch.setenv("GITLAB_MODE", "mock")  # don't touch the real GitLab in tests
     import webhook
     webhook.DB_PATH = str(tmp_path / "kpis_test.db")
     webhook.init_db()

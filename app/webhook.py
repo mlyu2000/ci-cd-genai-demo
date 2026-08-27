@@ -40,7 +40,9 @@ def _mock():
 
 
 def _use_mock():
-    return MODE == "mock"
+    # Read dynamically so the mode follows the env (testability + correctness
+    # if the process env changes); MODE is the import-time default.
+    return os.getenv("GITLAB_MODE", MODE).lower() == "mock"
 
 
 # --------------------------------------------------------------------------
