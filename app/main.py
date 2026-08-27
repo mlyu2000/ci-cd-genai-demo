@@ -262,11 +262,11 @@ html[data-theme="light"] .ai-card{background:linear-gradient(135deg,#e6f7f4,#f2f
 <body>
 <header>
   <div><strong style="color:var(--hpe-blue)">CI/CD</strong> <strong style="color:var(--hpe-teal)">GenAI</strong> <span style="color:var(--muted)">Demo</span></div>
-  <div><nav><a>Pipeline</a><a>AI</a><a>Metrics</a></nav>
+  <div><nav><a onclick="navGo('pipeline')">Pipeline</a><a onclick="navGo('ai')">AI</a><a onclick="navGo('metrics')">Metrics</a></nav>
   <button class="theme-btn" onclick="toggleTheme()">Light/Dark</button></div>
 </header>
 
-<div class="hero">
+<div class="hero" id="metrics">
 <div class="card"><div class="kpi" id="kpi-mttr">--</div><div class="kpi-label">Last auto-fix time (min) · measured</div></div>
 <div class="card"><div class="kpi" id="kpi-rate">--</div><div class="kpi-label">Auto-Fix Rate · this session</div></div>
 <div class="card"><div class="kpi" id="kpi-rel">--</div><div class="kpi-label">Releases · last 7 days (live GitLab)</div></div>
@@ -276,7 +276,7 @@ html[data-theme="light"] .ai-card{background:linear-gradient(135deg,#e6f7f4,#f2f
 <div style="font-size:11px;color:var(--muted);padding:0 24px;margin-top:-10px">All KPIs are measured from this session and live GitLab data — no seeds, no fabricated numbers. Click <b style="color:var(--hpe-amber)">Reset demo</b> to zero the session counters.</div>
 
 <div class="main">
-  <div class="card">
+  <div class="card" id="pipeline">
     <h3>Pipeline • <span id="ref">-</span> #<span id="pid">-</span></h3>
     <div id="ref-hint" style="display:none;font-size:12px;color:var(--muted);margin-top:8px">No pipeline yet — click <b style="color:var(--hpe-blue)">▶ Run Pipeline</b> to start one (pipelines only start on demand, never automatically).</div>
     <div class="flow" id="flow">
@@ -423,6 +423,13 @@ html[data-theme="light"] .ai-card{background:linear-gradient(135deg,#e6f7f4,#f2f
 let lastTrace="";
 let pollTimer=null;
 function toggleTheme(){const h=document.documentElement;h.dataset.theme=h.dataset.theme==='light'?'dark':'light';localStorage.setItem('theme',h.dataset.theme);}
+function navGo(target){
+  if(target==='ai'){const c=document.getElementById('ai-card');
+    if(c && c.style.display!=='none'){c.scrollIntoView({behavior:'smooth',block:'center'});return;}
+    document.getElementById('pipeline').scrollIntoView({behavior:'smooth',block:'start'});return;}
+  const el=document.getElementById(target==='pipeline'?'pipeline':target);
+  if(el)el.scrollIntoView({behavior:'smooth',block:'start'});
+}
 let _t=null; try{ _t=localStorage.getItem('theme'); }catch(e){} if(_t)document.documentElement.dataset.theme=_t;
 function toggleDebug(){document.getElementById('debug').classList.toggle('collapsed');}
 function switchTab(tabId){
