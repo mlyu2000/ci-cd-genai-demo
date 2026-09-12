@@ -1,9 +1,5 @@
-"""User service for the payments app.
-
-(Import of Optional is missing in this fixture state — scenario
-`missing_import`; the module raises NameError at import time.)
-"""
-from typing import Dict
+"""User service for the payments app."""
+from typing import Dict, Optional
 
 
 def get_user(id: Optional[int]) -> Dict:
