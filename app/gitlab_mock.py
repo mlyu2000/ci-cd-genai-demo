@@ -20,11 +20,33 @@ def _proj(pid):
     return _STATE[pid]
 
 def seed_failing_pipeline(pid, ref: str = "main", scenario_id=None):
-    """Create a pipeline that fails at the integration stage (the showcase)."""
+    """Create a pipeline that fails at the integration stage (the showcase).
+
+    scenario_id=None -> a GREEN pipeline (used by the cascade's final round).
+    """
     p = _proj(pid)
-    scenario = get_scenario(scenario_id)
+    # scenario_id=None is the all-fixed state -> a GREEN pipeline (no scenario).
+    scenario = get_scenario(scenario_id) if scenario_id is not None else None
     p["current_scenario"] = scenario
-    
+    if scenario is None:
+        # all-fixed state: a fully green pipeline
+        pid_id = p["next_pid"]; p["next_pid"] += 1
+        jobs = [
+            {"id": pid_id * 10 + 1, "pipeline_id": pid_id, "stage": "build",
+             "name": "build", "status": "success", "trace": "docker build ... ok"},
+            {"id": pid_id * 10 + 2, "pipeline_id": pid_id, "stage": "test",
+             "name": "unit-test", "status": "success", "trace": "pytest -q ... 0 failed"},
+            {"id": pid_id * 10 + 3, "pipeline_id": pid_id, "stage": "integration",
+             "name": "integration-test", "status": "success",
+             "trace": "3 passed (pool=10/5, retries on, imports ok)"},
+        ]
+        pipe = {"id": pid_id, "ref": ref, "status": "success",
+                "created_at": time.time(), "scenario_id": None}
+        p["pipelines"].append({"pipeline": pipe, "jobs": jobs, "trace": "",
+                               "scenario": None, "file_before": None,
+                               "file_after": None, "git_diff": ""})
+        return pipe
+
     pid_id = p["next_pid"]; p["next_pid"] += 1
     jobs = [
         {"id": pid_id * 10 + 1, "pipeline_id": pid_id, "stage": "build",
@@ -47,9 +69,13 @@ def seed_failing_pipeline(pid, ref: str = "main", scenario_id=None):
     })
     return pipe
 
-def trigger_pipeline(pid, ref: str = "main"):
-    """Start a fresh pipeline (replays the failing flow for the demo)."""
-    return seed_failing_pipeline(pid, ref)
+def trigger_pipeline(pid, ref: str = "main", scenario_id=None):
+    """Start a fresh pipeline.
+
+    scenario_id: a SCENARIOS id -> that failure; None -> a GREEN pipeline
+    (the cascade's final round: everything fixed, nothing left to fail).
+    """
+    return seed_failing_pipeline(pid, ref, scenario_id=scenario_id)
 
 def poll_pipeline_state(pid=None):
     p = _proj(pid or os.getenv("GITLAB_PROJECT_ID", "1"))

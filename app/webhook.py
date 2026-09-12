@@ -68,6 +68,25 @@ def init_db():
             conn.execute("""INSERT INTO kpis
                 (id, auto_fixes, manual_fixes, fixed_pipeline_ids, fix_seconds, last_risk)
                 VALUES (1, 0, 0, '[]', 0.0, 0)""")
+        # Governance audit log: every agent action (analyze/critic/apply/merge/
+        # gate decisions) with timestamps. Permanent — never wiped by Reset demo.
+        conn.execute("""CREATE TABLE IF NOT EXISTS audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL, actor TEXT, action TEXT, detail TEXT, gate TEXT)""")
+        # Cost inputs for the money engine (audience-configurable, not hardcoded).
+        conn.execute("""CREATE TABLE IF NOT EXISTS costs (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            hourly_rate REAL, downtime_cost_per_hour REAL,
+            manual_triage_minutes REAL)""")
+        conn.execute("""INSERT INTO costs (id, hourly_rate, downtime_cost_per_hour, manual_triage_minutes)
+            VALUES (1, 150.0, 1500.0, 45.0)
+            ON CONFLICT(id) DO NOTHING""")
+        # Per-run history: one row per completed fix cycle (sparklines + replay).
+        conn.execute("""CREATE TABLE IF NOT EXISTS runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL, pipeline_id TEXT, scenario_id TEXT, source TEXT,
+            fix_seconds REAL, saved_minutes REAL, risk_score INTEGER,
+            merged INTEGER)""")
 
 
 def emit(event: dict):
@@ -128,6 +147,101 @@ def reset_demo():
     emit({"type": "reset", "ts": time.time()})
 
 
+# ---- governance audit log ---------------------------------------------------
+def audit(actor: str, action: str, detail: str = "", gate: str = ""):
+    """Record an agent action (permanent; Reset demo does not wipe this)."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("INSERT INTO audit (ts, actor, action, detail, gate) VALUES (?,?,?,?,?)",
+                         (time.time(), actor, action, str(detail)[:500], gate))
+    except Exception:
+        pass
+
+
+def audit_log(limit: int = 50):
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT ts, actor, action, detail, gate FROM audit ORDER BY id DESC LIMIT ?",
+                            (limit,)).fetchall()
+    return [{"ts": r[0], "actor": r[1], "action": r[2], "detail": r[3], "gate": r[4]} for r in rows]
+
+
+# ---- cost inputs (money engine) ---------------------------------------------
+def get_costs() -> dict:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT hourly_rate, downtime_cost_per_hour, manual_triage_minutes FROM costs WHERE id = 1").fetchone()
+    return {"hourly_rate": float(row[0] or 0), "downtime_cost_per_hour": float(row[1] or 0),
+            "manual_triage_minutes": float(row[2] or 45)} if row else {
+        "hourly_rate": 150.0, "downtime_cost_per_hour": 1500.0, "manual_triage_minutes": 45.0}
+
+
+def set_costs(hourly_rate: float = None, downtime_cost_per_hour: float = None,
+              manual_triage_minutes: float = None) -> dict:
+    c = get_costs()
+    if hourly_rate is not None:
+        c["hourly_rate"] = max(0.0, float(hourly_rate))
+    if downtime_cost_per_hour is not None:
+        c["downtime_cost_per_hour"] = max(0.0, float(downtime_cost_per_hour))
+    if manual_triage_minutes is not None:
+        c["manual_triage_minutes"] = max(1.0, float(manual_triage_minutes))
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE costs SET hourly_rate=?, downtime_cost_per_hour=?, manual_triage_minutes=? WHERE id=1",
+                     (c["hourly_rate"], c["downtime_cost_per_hour"], c["manual_triage_minutes"]))
+    audit("user", "costs_updated", json.dumps(c))
+    return c
+
+
+def savings_money(saved_minutes: float, costs: dict = None) -> float:
+    """Money value of recovered triage time (measured minutes x loaded rate)."""
+    c = costs or get_costs()
+    return round((saved_minutes or 0) / 60.0 * c["hourly_rate"], 2)
+
+
+def downtime_cost(fix_seconds: float, costs: dict = None) -> float:
+    """Money the failed release train cost while the fix was pending."""
+    c = costs or get_costs()
+    return round((fix_seconds or 0) / 3600.0 * c["downtime_cost_per_hour"], 2)
+
+
+# ---- per-run history (sparklines + replay) -----------------------------------
+def record_run(pipeline_id, scenario_id: str, source: str, fix_seconds: float,
+               saved_minutes: float, risk_score: int, merged: bool):
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("INSERT INTO runs (ts, pipeline_id, scenario_id, source, fix_seconds, "
+                         "saved_minutes, risk_score, merged) VALUES (?,?,?,?,?,?,?,?)",
+                         (time.time(), str(pipeline_id), scenario_id or "", source or "live-llm",
+                          float(fix_seconds or 0), float(saved_minutes or 0), int(risk_score or 0),
+                          1 if merged else 0))
+    except Exception:
+        pass
+
+
+def recent_runs(limit: int = 12):
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT ts, pipeline_id, scenario_id, source, fix_seconds, "
+                            "saved_minutes, risk_score, merged FROM runs ORDER BY id DESC LIMIT ?",
+                            (limit,)).fetchall()
+    return [{"ts": r[0], "pipeline_id": r[1], "scenario_id": r[2], "source": r[3],
+             "fix_seconds": r[4], "saved_minutes": r[5], "risk_score": r[6],
+             "merged": bool(r[7])} for r in rows][::-1]  # chronological
+
+
+def replay_payload(pipeline_id: str) -> dict:
+    """Rebuild a stored run for the UI time-machine (replay last run)."""
+    with sqlite3.connect(DB_PATH) as conn:
+        r = conn.execute("SELECT ts, scenario_id, source, fix_seconds, saved_minutes, risk_score, "
+                         "merged FROM runs WHERE pipeline_id=? ORDER BY id DESC LIMIT 1",
+                         (str(pipeline_id),)).fetchone()
+    if not r:
+        # fall back to the most recent run
+        r = conn.execute("SELECT ts, scenario_id, source, fix_seconds, saved_minutes, risk_score, "
+                         "merged FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+    if not r:
+        return {}
+    return {"pipeline_id": str(pipeline_id), "ts": r[0], "scenario_id": r[1], "source": r[2],
+            "fix_seconds": r[3], "saved_minutes": r[4], "risk_score": r[5], "merged": bool(r[6])}
+
+
 # ---- measured KPIs --------------------------------------------------------
 def _releases_last_7d(project_id: int) -> int:
     """Green pipelines in the last 7 days (real GitLab), 0 in mock mode."""
@@ -157,7 +271,11 @@ def _ts_of(pipe: dict) -> float:
 
 
 def get_metrics(project_id: int = None) -> dict:
-    """Honest KPIs: measured from this session + live GitLab data."""
+    """Honest KPIs: measured from this session + live GitLab data.
+
+    Includes the money engine (audience-set cost inputs x measured minutes)
+    and sparklines over the last N completed runs (measured, from the runs store).
+    """
     pid = project_id or PROJECT_ID
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
@@ -167,6 +285,12 @@ def get_metrics(project_id: int = None) -> dict:
     rate = round(100 * auto / total) if total else None
     releases = _releases_last_7d(pid)
     hours_saved = round((fix_seconds or 0) / 3600.0, 2)
+    costs = get_costs()
+    # measured triage minutes saved this session: manual baseline x auto-fixes,
+    # minus what the agent actually spent (measured fix_seconds).
+    saved_minutes = round(auto * costs["manual_triage_minutes"] - (fix_seconds or 0) / 60.0, 1)
+    saved_minutes = max(0.0, saved_minutes)
+    runs = recent_runs(12)
     return {
         "auto_fix_rate": rate,                 # None until first fix happens
         "auto_fixes": auto, "manual_fixes": manual,
@@ -175,6 +299,15 @@ def get_metrics(project_id: int = None) -> dict:
         "last_fix_seconds": round(fix_seconds or 0.0, 1),
         "hours_saved_session": hours_saved,    # measured: sum of fix durations this session
         "observed": True,                      # UI: label values as measured
+        # ---- money engine (measured minutes x audience-set rates) ----
+        "cost_inputs": costs,
+        "saved_minutes_session": saved_minutes,
+        "savings_usd_session": savings_money(saved_minutes, costs),
+        "downtime_cost_usd_last": downtime_cost(fix_seconds, costs),
+        # ---- sparklines (last runs, measured) ----
+        "spark_mttr_min": [round(r["fix_seconds"] / 60.0, 1) for r in runs if r["fix_seconds"] > 0][-8:],
+        "spark_saved_usd": [round(savings_money(r["saved_minutes"], costs), 2) for r in runs][-8:],
+        "runs_count": len(runs),
     }
 
 
@@ -551,7 +684,12 @@ def create_merge_request(project_id: int, branch: str, title: str, patch: str,
             ),
         })
         if isinstance(mres, dict) and mres.get("error"):
+            audit("fixer", "mr_failed", str(mres.get("error"))[:200])
             return {"applied": False, "error": mres["error"]}
+        audit("fixer", "mr_created",
+              f"MR !{mres.get('iid')} '{title}' branch={branch} files={','.join(files_committed[:4])} "
+              f"applied={applied} risk={analysis.get('risk_score')} conf={analysis.get('confidence')}",
+              gate="applied" if applied else "attached-for-review")
         return {
             "applied": applied,
             "patch_applied": applied,
@@ -576,10 +714,17 @@ def create_merge_request(project_id: int, branch: str, title: str, patch: str,
 def merge_merge_request(project_id: int, mr_iid: int, sha: str = "") -> dict:
     """Merge an MR (real GitLab). sha guards against merging a stale version."""
     if _use_mock():
+        audit("fixer", "mr_merged", f"MR !{mr_iid} (mock)", gate="mock")
         return {"merged": True, "mr_iid": mr_iid}
-    return api_put(f"projects/{project_id}/merge_requests/{mr_iid}/merge",
-                   {"should_remove_source_branch": True,
-                    **({"sha": sha} if sha else {})})
+    res = api_put(f"projects/{project_id}/merge_requests/{mr_iid}/merge",
+                  {"should_remove_source_branch": True,
+                   **({"sha": sha} if sha else {})})
+    if isinstance(res, dict) and (res.get("merged") or res.get("state") == "merged"
+                                  or res.get("state_event") == "merged"):
+        audit("fixer", "mr_merged", f"MR !{mr_iid} via GitLab API", gate="autonomous-gate-pass")
+    else:
+        audit("fixer", "merge_refused", str(res)[:200], gate="gate")
+    return res
 
 
 def recent_events(limit: int = 50):

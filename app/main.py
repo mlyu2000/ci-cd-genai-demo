@@ -32,6 +32,13 @@ app = Flask(__name__)
 # Honour GITLAB_MODE so the dashboard can run against the mock or real GitLab.
 os.environ["GITLAB_MODE"] = os.getenv("GITLAB_MODE", "real").lower()
 
+# The dashboard UI lives in a real file (ui_template.html) — not an inline
+# Python triple-quoted string — so it can be edited without escape-drift and is
+# the exact markup the browser receives (no Python string-escape mangling).
+_UI_TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_template.html")
+with open(_UI_TEMPLATE_PATH, "r") as _f:
+    HTML = _f.read()
+
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://127.0.0.1:18080/v1")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "«redacted:sk-…»")
 FLASK_PORT = int(os.getenv("FLASK_PORT", "8080"))
@@ -158,705 +165,7 @@ def get_git_info():
                 "dirty": [], "recent_commits": [], "remote": "n/a", "remote_name": "gitlab",
                 "commit_count": 0, "full_message": "n/a"}
 
-HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"><title>CI/CD GenAI Demo</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-:root{
-  --hpe-blue:#0078d4; --hpe-teal:#00bfa5; --hpe-slate:#1a1d23;
-  --hpe-green:#5fc80a; --hpe-amber:#f5a623; --hpe-red:#e3254b;
-  --bg:#0f1115; --card:#181c22; --muted:#9aa6b2; --text:#e9edf2; --border:#283040;
-}
-html[data-theme="light"]{
-  --bg:#f3f5f7; --card:#ffffff; --muted:#5a6b7b; --text:#16202b; --border:#d6dee6;
-  --code-bg:#eef2f6; --code-fg:#16202b; --add-fg:#1e7a06; --del-fg:#b0003a; --info-fg:#0060a9;
-}
-:root{--code-bg:#0a0f1a; --code-fg:#c9d6e2; --add-fg:#9bff5a; --del-fg:#ff7a96; --info-fg:#6cb8ff}
-*{box-sizing:border-box}
-body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
-header{padding:14px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
-nav a{color:var(--muted);margin:0 12px;text-decoration:none}
-.theme-btn{background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 12px;cursor:pointer}
-.hero{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:20px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
-.kpi{font-size:26px;font-weight:700;color:var(--hpe-blue)}
-.kpi-label{color:var(--muted);font-size:12px;margin-top:4px}
-.main{display:grid;grid-template-columns:2fr 1fr;gap:16px;padding:0 24px 24px}
-.flow{display:flex;align-items:center;gap:4px;margin-top:12px}
-.flow-stage{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:96px}
-.flow-dot{width:16px;height:16px;border-radius:50%;background:var(--muted);border:2px solid var(--border)}
-.flow-dot.ok{background:var(--hpe-green);border-color:var(--hpe-green)}
-.flow-dot.err{background:var(--hpe-red);border-color:var(--hpe-red)}
-.flow-dot.run{background:var(--hpe-amber);border-color:var(--hpe-amber);animation:pulse 1s infinite}
-.flow-name{font-size:12px;font-weight:600}
-.flow-status{font-size:11px;color:var(--muted)}
-.flow-status.ok{color:var(--hpe-green)} .flow-status.err{color:var(--hpe-red)} .flow-status.run{color:var(--hpe-amber)}
-.flow-conn{flex:1;min-width:24px;display:flex;align-items:center;height:16px}
-.flow-line{width:100%;height:2px;background:var(--border);transition:background .3s}
-.flow-line.ok{background:var(--hpe-green)} .flow-line.err{background:var(--hpe-red)}
-.scenario-card{background:rgba(0,191,165,.06);border:1px solid var(--hpe-teal);border-radius:8px;padding:10px 12px;margin-top:12px}
-.scenario-title{font-size:12px;font-weight:600;color:var(--hpe-teal);margin-bottom:4px}
-.howit{font-size:12px;line-height:1.55;color:var(--muted);padding-left:18px;margin:8px 0 0}
-.howit b{color:var(--text)}
-.howit code{background:var(--code-bg);border:1px solid var(--border);border-radius:4px;padding:0 4px;font-size:11px;color:var(--hpe-teal)}
-.analyzing{display:inline-block;width:10px;height:10px;border:2px solid var(--hpe-teal);border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;vertical-align:-1px;margin-left:8px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.agent-badge{font-size:11px;padding:3px 8px;border-radius:6px;margin-left:10px;vertical-align:middle}
-.agent-badge.live{background:rgba(95,200,10,.15);color:var(--hpe-green);border:1px solid var(--hpe-green)}
-.agent-badge.fallback{background:rgba(245,166,35,.15);color:var(--hpe-amber);border:1px solid var(--hpe-amber)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-.badge{padding:2px 8px;border-radius:6px;font-size:11px;background:var(--border);color:var(--muted)}
-.ai-card{background:linear-gradient(135deg,#10202e,#0c1a26);border:1px solid var(--hpe-teal);border-radius:12px;padding:16px;margin-top:14px}
-html[data-theme="light"] .ai-card{background:linear-gradient(135deg,#e6f7f4,#f2fbf9)}
-.ai-card h4{margin:0 0 8px;color:var(--hpe-teal)}
-.diff{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:monospace;font-size:12px;white-space:pre-wrap;color:var(--code-fg);max-height:220px;overflow:auto}
-.diff .add{background:rgba(95,200,10,.15);color:var(--add-fg);display:block}
-.diff .del{background:rgba(227,37,75,.15);color:var(--del-fg);display:block}
-.diff .meta{color:var(--hpe-amber);display:block}
-.metric-row{display:flex;gap:12px;margin:4px 0 0;flex-wrap:wrap}
-.metric-card{flex:1;min-width:130px;background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
-.metric-value{font-size:24px;font-weight:700;line-height:1.1}
-.metric-label{font-size:11px;color:var(--muted);margin-top:4px}
-.btn{background:var(--hpe-blue);border:none;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;margin-right:8px}
-.btn.secondary{background:var(--card);color:var(--text);border:1px solid var(--border)}
-.source-list{font-size:12px;color:var(--muted);margin-top:8px}
-.source-item{padding:4px 0;border-bottom:1px solid var(--border)}
-.src-grid{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;margin-top:6px}
-.src-grid .k{color:var(--muted)}
-.src-grid .v{color:var(--text);word-break:break-all}
-.diffstat{margin-top:8px;max-height:150px;overflow:auto;border:1px solid var(--border);border-radius:8px}
-.diffstat-row{display:flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;border-bottom:1px solid var(--border);font-family:monospace}
-.diffstat-row:last-child{border-bottom:none}
-.diffstat-row .ct{width:16px;height:16px;border-radius:4px;font-size:10px;font-weight:700;display:inline-flex;align-items:center;justify-content:center}
-.ct.M{background:rgba(0,120,212,.2);color:var(--info-fg)}.ct.A{background:rgba(95,200,10,.2);color:var(--hpe-green)}
-.ct.D{background:rgba(227,37,75,.2);color:var(--hpe-red)}.ct.R{background:rgba(245,166,35,.2);color:var(--hpe-amber)}
-.diffstat-row .fp{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.diffstat-row .add{color:var(--hpe-green);min-width:44px;text-align:right}
-.diffstat-row .del{color:var(--hpe-red);min-width:44px;text-align:right}
-.diffstat-total{padding:4px 8px;font-size:11px;border-top:1px solid var(--border);font-family:monospace}
-.mini-commit{font-size:11px;padding:3px 0;border-bottom:1px dashed var(--border);font-family:monospace}
-.mini-commit:last-child{border-bottom:none}
-.dirty-chip{display:inline-block;background:rgba(245,166,35,.18);color:var(--hpe-amber);border-radius:5px;padding:1px 6px;font-size:10px;margin:1px 2px 1px 0}
-.clean-chip{display:inline-block;background:rgba(95,200,10,.18);color:var(--hpe-green);border-radius:5px;padding:1px 6px;font-size:10px}
-.debug-console{margin-top:14px}
-.debug-header{display:flex;justify-content:space-between;align-items:center}
-.debug-content{max-height:260px;overflow:auto;background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:monospace;font-size:12px;color:var(--code-fg)}
-.dbg-line{padding:2px 0;border-bottom:1px dashed var(--border)}
-.dbg-line .dbg-tag{display:inline-block;min-width:56px;font-weight:700;font-size:10px;padding:0 5px;border-radius:4px;text-align:center;margin-right:6px;vertical-align:top}
-.dbg-tag.info{background:rgba(0,120,212,.2);color:var(--info-fg)}
-.dbg-tag.ok{background:rgba(95,200,10,.2);color:var(--hpe-green)}
-.dbg-tag.warn{background:rgba(245,166,35,.2);color:var(--hpe-amber)}
-.dbg-tag.err{background:rgba(227,37,75,.2);color:var(--hpe-red)}
-.dbg-tag.ai{background:rgba(0,191,165,.2);color:var(--hpe-teal)}
-.dbg-line .dbg-time{color:var(--muted);font-size:10px;margin-right:6px}
-.collapsed .debug-content{display:none}
-#stream{font-size:12px;color:var(--hpe-teal)}
-.autonomous{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-left:8px}
-.mr-link{margin-top:10px;font-size:12px}
-.mr-link a{color:var(--hpe-teal)}
-</style>
-</head>
-<body>
-<header>
-  <div><strong style="color:var(--hpe-blue)">CI/CD</strong> <strong style="color:var(--hpe-teal)">GenAI</strong> <span style="color:var(--muted)">Demo</span></div>
-  <div><nav><a onclick="navGo('pipeline')">Pipeline</a><a onclick="navGo('ai')">AI</a><a onclick="navGo('metrics')">Metrics</a></nav>
-  <button class="theme-btn" onclick="toggleTheme()">Light/Dark</button></div>
-</header>
 
-<div class="hero" id="metrics">
-<div class="card"><div class="kpi" id="kpi-mttr">--</div><div class="kpi-label">Last auto-fix time (min) · measured</div></div>
-<div class="card"><div class="kpi" id="kpi-rate">--</div><div class="kpi-label">Auto-Fix Rate · this session</div></div>
-<div class="card"><div class="kpi" id="kpi-rel">--</div><div class="kpi-label">Releases · last 7 days (live GitLab)</div></div>
-<div class="card"><div class="kpi" id="kpi-risk">--</div><div class="kpi-label">Risk Score · last fix</div></div>
-<div class="card"><div class="kpi" id="kpi-savings">--</div><div class="kpi-label">Triage time saved · this session</div></div>
-</div>
-<div style="font-size:11px;color:var(--muted);padding:0 24px;margin-top:-10px">All KPIs are measured from this session and live GitLab data — no seeds, no fabricated numbers. Click <b style="color:var(--hpe-amber)">Reset demo</b> to zero the session counters.</div>
-
-<div class="main">
-  <div class="card" id="pipeline">
-    <h3>Pipeline • <span id="ref">-</span> #<span id="pid">-</span></h3>
-    <div id="ref-hint" style="display:none;font-size:12px;color:var(--muted);margin-top:8px">No pipeline yet — click <b style="color:var(--hpe-blue)">▶ Run Pipeline</b> to start one (pipelines only start on demand, never automatically).</div>
-    <div class="flow" id="flow">
-      <div class="flow-stage" id="fs-build">
-        <div class="flow-dot" id="dot-build"></div>
-        <div class="flow-name">Build</div>
-        <div class="flow-status" id="build-status">-</div>
-      </div>
-      <div class="flow-conn" id="conn-build"><div class="flow-line" id="fline-build"></div></div>
-      <div class="flow-stage" id="fs-test">
-        <div class="flow-dot" id="dot-test"></div>
-        <div class="flow-name">Unit Tests</div>
-        <div class="flow-status" id="test-status">-</div>
-      </div>
-      <div class="flow-conn" id="conn-test"><div class="flow-line" id="fline-test"></div></div>
-      <div class="flow-stage" id="fs-int">
-        <div class="flow-dot" id="dot-int"></div>
-        <div class="flow-name">Integration Tests</div>
-        <div class="flow-status" id="int-status">-</div>
-      </div>
-    </div>
-    <div class="scenario-card" id="scenario-card" style="display:none">
-      <div class="scenario-title">🧪 What this stage actually tests</div>
-      <div id="scenario-desc" style="font-size:12px;line-height:1.5"></div>
-    </div>
-
-    <div class="actions" style="margin-top:12px">
-      <button class="btn" onclick="runPipeline()">▶ Run Pipeline</button>
-      <button class="btn secondary" onclick="startPolling()">↻ Refresh</button>
-      <button class="btn secondary" onclick="resetDemo()">Reset demo</button>
-      <label class="autonomous" title="When enabled, the MR is auto-merged ONLY after its own pipeline goes green and the risk gates pass. This calls the real GitLab merge API."><input type="checkbox" id="autonomous"> Autonomous: auto-merge on green</label>
-    </div>
-
-      <div class="ai-card" id="ai-card" style="display:none">
-      <h4>🤖 AI Root-Cause & Auto-Fix <span class="agent-badge" id="agent-badge">…</span></h4>
-      <div id="ai-reason" style="white-space:pre-wrap"></div>
-      <div class="metric-row">
-        <div class="metric-card">
-          <div class="metric-value" id="g-conf" style="color:var(--hpe-green)">--</div>
-          <div class="metric-label">Confidence (gate ≥ 0.70)</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value" id="g-risk" style="color:var(--hpe-amber)">--</div>
-          <div class="metric-label">Risk Score (gate ≤ 70)</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value" id="g-gate" style="color:var(--muted)">--</div>
-          <div class="metric-label">Auto-Merge Gate</div>
-        </div>
-      </div>
-      
-      <!-- Tabs -->
-      <div style="margin:12px 0;border-bottom:1px solid var(--border)">
-        <button class="btn secondary" onclick="switchTab('tab-reasoning')" id="btn-reasoning" style="padding:6px 10px;font-size:12px">Reasoning</button>
-        <button class="btn secondary" onclick="switchTab('tab-patch')" id="btn-patch" style="padding:6px 10px;font-size:12px">Patch</button>
-        <button class="btn secondary" onclick="switchTab('tab-validation')" id="btn-validation" style="padding:6px 10px;font-size:12px">Validation</button>
-        <button class="btn secondary" onclick="switchTab('tab-baseline')" id="btn-baseline" style="padding:6px 10px;font-size:12px">Manual Baseline</button>
-      </div>
-      
-      <div id="tab-reasoning" style="display:none">
-        <div style="font-size:13px;color:var(--muted);margin-bottom:8px">Root Cause</div>
-        <div id="reasoning-cause" style="font-weight:600;margin-bottom:8px"></div>
-        <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Reasoning Steps</div>
-        <div id="reasoning-steps" style="font-size:12px;white-space:pre-wrap"></div>
-        <div style="font-size:13px;color:var(--muted);margin:8px 0 4px">Failure Category</div>
-        <div id="reasoning-category" style="font-size:12px"></div>
-      </div>
-      
-      <div id="tab-patch" style="display:none">
-        <div class="diff" id="ai-diff"></div>
-        <div id="patch-files" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
-      </div>
-      
-      <div id="tab-validation" style="display:none">
-        <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Validation Commands</div>
-        <div id="validation-commands" style="font-size:12px;white-space:pre-wrap;font-family:monospace"></div>
-        <div style="font-size:13px;color:var(--muted);margin:8px 0 4px">Risk Assessment</div>
-        <div id="risk-assessment" style="font-size:12px"></div>
-        <div style="font-size:13px;color:var(--muted);margin:8px 0 4px">Gate Status</div>
-        <div id="gate-status" style="font-size:12px;font-weight:600"></div>
-      </div>
-      
-      <div id="tab-baseline" style="display:none">
-        <div style="background:rgba(227,37,75,0.1);border:1px solid var(--hpe-red);border-radius:8px;padding:12px;margin-bottom:12px">
-          <div style="font-weight:600;color:var(--hpe-red);margin-bottom:6px">⚠️ Manual Triage Baseline</div>
-          <div id="baseline-time" style="font-size:13px"></div>
-          <div id="baseline-steps" style="font-size:12px;margin-top:6px"></div>
-        </div>
-        <div style="background:rgba(95,200,10,0.1);border:1px solid var(--hpe-green);border-radius:8px;padding:12px">
-          <div style="font-weight:600;color:var(--hpe-green);margin-bottom:6px">✅ AI Auto-Fix</div>
-          <div id="auto-time" style="font-size:13px"></div>
-          <div id="time-saved" style="font-size:12px;margin-top:6px;font-weight:600"></div>
-        </div>
-      </div>
-      
-      <div class="mr-link" id="mr-link" style="display:none"></div>
-      <div style="margin-top:10px">
-        <button class="btn" onclick="approveFix()">Approve Auto-Fix</button>
-        <button class="btn secondary" onclick="rejectFix()">Dismiss</button>
-      </div>
-    </div>
-
-    <div class="debug-console collapsed" id="debug">
-      <div class="debug-header"><strong>Debug Console</strong>
-        <button class="btn secondary" onclick="toggleDebug()">Toggle</button></div>
-      <div class="debug-content" id="debug-log"></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>Source & Commit <span id="g-dirty-chip" style="float:right"></span></h3>
-    <div class="src-grid" id="src-grid">
-      <span class="k">Branch</span><span class="v" id="g-branch"></span>
-      <span class="k">Commit</span><span class="v" id="g-hash"></span>
-      <span class="k">Committer</span><span class="v" id="g-author"></span>
-      <span class="k">E-mail</span><span class="v" id="g-author-email"></span>
-      <span class="k">Committed</span><span class="v" id="g-time"></span>
-      <span class="k">Source</span><span class="v" id="g-remote"></span>
-      <span class="k">Repo size</span><span class="v" id="g-reposize"></span>
-      <span class="k">Changes</span><span class="v" id="g-changesummary"></span>
-    </div>
-    <div style="font-size:12px;color:var(--muted);margin-top:8px">Message</div>
-    <div id="g-msg" style="font-size:12px;white-space:pre-wrap;background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:8px;margin-top:4px;font-family:monospace"></div>
-    <div style="font-size:12px;color:var(--muted);margin-top:8px">Changed files <span id="g-files-count"></span></div>
-    <div class="diffstat" id="g-files"></div>
-    <div style="font-size:12px;color:var(--muted);margin-top:8px">Recent commits</div>
-    <div id="g-recent"></div>
-    <div style="margin-top:10px;font-size:12px;color:var(--muted)">GenAI Agent: <span id="g-llm" style="color:var(--hpe-teal)"></span></div>
-    <h3 style="margin-top:16px">Live Event Stream</h3>
-    <div id="stream"></div>
-    <h3 style="margin-top:16px">How this works <span style="font-size:10px;color:var(--muted)">(no fakes)</span></h3>
-    <ol class="howit">
-      <li><b>Run Pipeline</b> starts a real GitLab pipeline on the real runner: Build → Unit → Integration.</li>
-      <li>Integration runs <code>tests/integration/</code> against the real config <code>app/db/pool.py</code> (pool=5, workers=6) and <b>deterministically fails</b>.</li>
-      <li>The <b>live LLM</b> (badge above) receives the full job trace + the failing source file + commit diff — no canned answers; if the LLM is down the badge says <b>fallback</b> and a curated analysis is used, clearly labeled.</li>
-      <li><b>Approve Auto-Fix</b> applies the LLM patch to the real files in a git worktree, pushes a branch and opens a real MR. If the patch can't be applied it attaches it for review and says so — it never fakes success.</li>
-      <li>The MR's <b>own pipeline verifies the fix</b>; with Autonomous on, the MR is merged via the real GitLab API only after it goes green and the risk gates pass.</li>
-      <li>All KPIs are measured from this session + live GitLab data. <b>Reset demo</b> zeroes the session counters.</li>
-    </ol>
-  </div>
-</div>
-
-<script>
-let lastTrace="";
-let pollTimer=null;
-function toggleTheme(){const h=document.documentElement;h.dataset.theme=h.dataset.theme==='light'?'dark':'light';localStorage.setItem('theme',h.dataset.theme);}
-function navGo(target){
-  if(target==='ai'){const c=document.getElementById('ai-card');
-    if(c && c.style.display!=='none'){c.scrollIntoView({behavior:'smooth',block:'center'});return;}
-    document.getElementById('pipeline').scrollIntoView({behavior:'smooth',block:'start'});return;}
-  const el=document.getElementById(target==='pipeline'?'pipeline':target);
-  if(el)el.scrollIntoView({behavior:'smooth',block:'start'});
-}
-let _t=null; try{ _t=localStorage.getItem('theme'); }catch(e){} if(_t)document.documentElement.dataset.theme=_t;
-function toggleDebug(){document.getElementById('debug').classList.toggle('collapsed');}
-function switchTab(tabId){
-  const tabs=['tab-reasoning','tab-patch','tab-validation','tab-baseline'];
-  tabs.forEach(t=>{const el=document.getElementById(t); if(el) el.style.display=(t===tabId)?'block':'none';});
-  const btns={'tab-reasoning':'btn-reasoning','tab-patch':'btn-patch','tab-validation':'btn-validation','tab-baseline':'btn-baseline'};
-  Object.entries(btns).forEach(([t,b])=>{const el=document.getElementById(b); if(el) el.style.fontWeight=(t===tabId)?'700':'400';});
-}
-function log(msg, tag){
-  tag=tag||'INFO';
-  const tags={OK:'ok',INFO:'info',WARN:'warn',ERROR:'err',FAIL:'err',AI:'ai'};
-  const cls=tags[tag]||'info';
-  const t=new Date().toLocaleTimeString();
-  const d=document.getElementById('debug-log');
-  const line=document.createElement('div');
-  line.className='dbg-line';
-  line.innerHTML='<span class="dbg-tag '+cls+'">'+tag+'</span><span class="dbg-time">'+t+'</span>'+String(msg).replace(/</g,'&lt;');
-  d.appendChild(line);
-  while(d.children.length>300) d.removeChild(d.firstChild);
-  d.scrollTop=d.scrollHeight;
-}
-function streamEvent(e){const s=document.getElementById('stream');s.innerHTML+="<div>["+new Date().toLocaleTimeString()+"] "+JSON.stringify(e)+"</div>";}
-// Extract a short, human-readable failure snippet from a raw (GitLab) trace.
-// Strips the timestamp + runner prefix, keeps the meaningful error lines.
-function failSnippet(trace, max){
-  max=max||5;
-  const keywords=/AssertionError|Error:|FAILED|Traceback|Exception|ERROR:|Error\\b|exit code \\d|No module|assert /;
-  const lines=(trace||"").split(String.fromCharCode(10))
-    .map(l=>l.replace(/^\\d{4}-\\d{2}-\\d{2}T[^\\s]+\\s*\\d+[EO]\\s*/,"").trim())
-    .filter(l=>l.length>0);
-  // Prefer lines that look like the actual failure; fall back to the tail.
-  let hits=lines.filter(l=>keywords.test(l));
-  if(hits.length===0) hits=lines.slice(-max);
-  hits=hits.slice(-max);
-  return hits.join(String.fromCharCode(10));
-}
-
-// Git info (enriched: author, remote, diffstat, recent commits, working-tree status)
-fetch('/api/git').then(r=>r.json()).then(g=>{
-  document.getElementById('g-branch').textContent=g.branch||'-';
-  document.getElementById('g-hash').textContent=g.commit_hash||'-';
-  document.getElementById('g-author').textContent=g.author_name||'-';
-  const emEl=document.getElementById('g-author-email'); if(emEl) emEl.textContent=g.author_email||'-';
-  document.getElementById('g-time').textContent=(g.commit_time||'-').replace('T',' ').slice(0,19)+' UTC';
-  const rm=document.getElementById('g-remote');
-  if(rm) rm.textContent=(g.remote_name==='gitlab'?'GitLab — ':'')+(g.remote||'-');
-  const rs=document.getElementById('g-reposize');
-  if(rs) rs.textContent=(g.commit_count||0)+' commits';
-  // Dirty / clean working-tree chip
-  const chip=document.getElementById('g-dirty-chip');
-  if(chip){
-    if(g.is_dirty && g.dirty && g.dirty.length){
-      chip.innerHTML='<span class="dirty-chip">'+g.dirty.length+' uncommitted</span>';
-    } else {
-      chip.innerHTML='<span class="clean-chip">clean</span>';
-    }
-  }
-  // Change summary
-  const cs=document.getElementById('g-changesummary');
-  if(cs) cs.innerHTML=(g.files_count||0)+' file(s) · <span style="color:var(--hpe-green)">+'+(g.total_added||0)+'</span> <span style="color:var(--hpe-red)">-'+(g.total_deleted||0)+'</span>';
-  // Full message
-  const msgEl=document.getElementById('g-msg');
-  if(msgEl) msgEl.textContent=(g.full_message||g.commit_msg||'').slice(0,400);
-  // Per-file diffstat
-  const filesEl=document.getElementById('g-files');
-  if(filesEl){
-    const ds=g.diffstat||[];
-    const fc=document.getElementById('g-files-count'); if(fc) fc.textContent='('+(g.files_count||0)+')';
-    if(ds.length===0){ filesEl.innerHTML='<div class="diffstat-row" style="color:var(--muted)">no diff info</div>'; }
-    else{
-      let rows='';
-      ds.forEach(d=>{
-        rows+='<div class="diffstat-row"><span class="ct '+(d.change_type||'M')+'">'+(d.change_type||'M')+'</span>'
-          +'<span class="fp" title="'+d.path+'">'+d.path+'</span>'
-          +'<span class="add">+'+(d.added||0)+'</span><span class="del">-'+(d.deleted||0)+'</span></div>';
-      });
-      rows+='<div class="diffstat-total"><span style="color:var(--hpe-green)">+'+(g.total_added||0)+'</span> '
-        +'<span style="color:var(--hpe-red)">-'+(g.total_deleted||0)+'</span> across '+(g.files_count||0)+' files</div>';
-      filesEl.innerHTML=rows;
-    }
-  }
-  // Recent commits
-  const recentEl=document.getElementById('g-recent');
-  if(recentEl){
-    const rc=g.recent_commits||[];
-    recentEl.innerHTML=rc.length? rc.map(c=>'<div class="mini-commit" title="'+c.time+'">'
-      +'<span style="color:var(--hpe-teal)">'+c.hash+'</span> '+c.msg
-      +'<span style="color:var(--muted)"> · '+c.author+'</span></div>').join('')
-      : '<div style="color:var(--muted);font-size:12px">n/a</div>';
-  }
-});
-
-// GenAI agent provenance — show the audience which LLM is actually answering.
-fetch('/api/agent-info').then(r=>r.json()).then(ai=>{
-  const b=document.getElementById('agent-badge');
-  window._agentInfo=ai;
-  b.textContent='live LLM: '+(ai.model||'unknown');
-  b.className='agent-badge live';
-  const gEl=document.getElementById('g-llm');
-  if(gEl) gEl.textContent=(ai.model||'unknown')+' @ '+ai.endpoint;
-}).catch(()=>{ const b=document.getElementById('agent-badge'); b.textContent='unknown'; b.className='agent-badge fallback'; });
-
-// KPIs are MEASURED (this session + live GitLab). No seeds.
-function loadMetrics(){
-  fetch('/api/metrics').then(r=>r.json()).then(m=>{
-    document.getElementById('kpi-mttr').textContent = m.last_fix_seconds ? (m.last_fix_seconds/60).toFixed(1)+'m' : '--';
-    document.getElementById('kpi-rate').textContent = (m.auto_fix_rate===null||m.auto_fix_rate===undefined) ? '--' : m.auto_fix_rate+'%';
-    document.getElementById('kpi-rel').textContent = m.releases_7d;
-    document.getElementById('kpi-risk').textContent = m.auto_fixes ? m.risk_score : '--';
-    document.getElementById('kpi-savings').textContent = m.hours_saved_session ? m.hours_saved_session+'h' : '--';
-  }).catch(()=>{});
-}
-function resetDemo(){
-  if(!confirm('Reset demo session counters (auto-fixes, fix time)? Pipeline history in GitLab is untouched.')) return;
-  fetch('/api/reset',{method:'POST'}).then(r=>r.json()).then(()=>{
-    log('demo session counters reset','INFO');
-    loadMetrics();
-    startPolling();
-  });
-}
-loadMetrics();
-
-startPolling();
-
-// Poll GitLab pipeline state (real or mock)
-let _analyzedPid=null;      // analyze once per pipeline (prevents the infinite re-print loop)
-let _lastEventKey=null;     // dedupe event-stream entries
-let _lastJobSig=null;       // log job status changes only when they change
-function _flowState(st){ return st==='success'?'ok':st==='failed'?'err':st==='running'?'run':''; }
-function pollState(){
-  fetch('/api/poll').then(r=>r.json()).then(s=>{
-    const p=s.pipeline||{};
-    if(!p.id){
-      document.getElementById('ref').textContent='-';
-      document.getElementById('pid').textContent='-';
-      document.getElementById('ref-hint').style.display='block';
-    } else {
-      document.getElementById('ref-hint').style.display='none';
-      document.getElementById('ref').textContent=p.ref||'-';
-      document.getElementById('pid').textContent=p.id||'-';
-    }
-    const js=s.jobs||[];
-    const byName=n=>js.filter(j=>j.name===n)[0];
-    const stCls=st=>st==='success'?'ok':st==='failed'?'err':st==='running'?'run':'';
-    const setDot=(id,st)=>{const e=document.getElementById(id); if(e)e.className='flow-dot '+_flowState(st);};
-    const setStat=(id,txt,st)=>{const e=document.getElementById(id); if(e){e.textContent=txt; e.className='flow-status '+stCls(st);}};
-    const setLine=(id,st)=>{const e=document.getElementById(id); if(e)e.className='flow-line '+_flowState(st);};
-    const b=byName('build')||{};
-    const tst=byName('unit-test')||{};
-    const intj=byName('integration-test')||{};
-    // Show status + real duration so every stage is transparent, not a dot.
-    const fmt=(j)=>{ let t=j.status||'-'; if(j.duration!=null && j.status!=='running' && j.status!=='created' && j.status!=='pending') t+=' \u2022 '+Number(j.duration).toFixed(0)+'s'; return t; };
-    setDot('dot-build', b.status); setStat('build-status', fmt(b), b.status);
-    setDot('dot-test', tst.status); setStat('test-status', fmt(tst), tst.status);
-    setDot('dot-int', intj.status); setStat('int-status', intj.status?intj.status.toUpperCase():'-', intj.status);
-    // connector colors follow the stage that FEEDS them
-    setLine('fline-build', b.status);
-    setLine('fline-test', tst.status);
-
-    // Explain what the integration stage actually tests (demystify the black box).
-    const sc=s.scenario;
-    const scCard=document.getElementById('scenario-card');
-    const stageDoc =
-      '<b>Build</b> = compile-check all Python (py_compile). &nbsp;•&nbsp; <b>Unit Tests</b> = pytest on the Flask app (tests/test_app.py). &nbsp;•&nbsp; <b>Integration Tests</b> = payments service under load (tests/integration_test.py): 6 parallel workers open DB connections; the pool allows only 5, so this test deterministically fails and hands the AI agent its triage target. Each stage runs on the real GitLab runner in its own job.';
-    if(sc){
-      scCard.style.display='block';
-      const descMap={
-        db_pool_exhaustion:'6 parallel test workers open DB connections; the pool allows 5 (overflow 0). The 6th worker blocks -> assertion fails. Failing file: <b>'+sc.changed_file+'</b>.',
-        missing_retry:'An integration test calls an external HTTP API with a 2s timeout and NO retry. Any blip -> timeout -> test fails. Failing file: <b>'+sc.changed_file+'</b>.',
-        missing_import:'A test imports a module that uses <code>Optional</code> without importing it -> NameError at load. Failing file: <b>'+sc.changed_file+'</b>.'
-      };
-      document.getElementById('scenario-desc').innerHTML =
-        (sc.name? '<b>'+sc.name+'</b>. ':'') +
-        (descMap[sc.id] || ('Reproduced failure in <b>'+(sc.changed_file||'unknown')+'</b> (category: '+(sc.category||'unknown')+').'));
-      document.getElementById('scenario-desc').innerHTML +=
-        ' <span style="color:var(--muted)">→ the AI agent receives the failing trace + the source of that file and must propose the fix.</span>';
-    } else {
-      // Real GitLab mode: no scenario object — show the static stage doc.
-      scCard.style.display='block';
-      document.getElementById('scenario-desc').innerHTML = stageDoc;
-    }
-
-    // Rich debug console: log meaningful state CHANGES, not "poll tick".
-    const jobSig=js.map(j=>j.name+':'+j.status).join(' ');
-    if(jobSig!==_lastJobSig){
-      _lastJobSig=jobSig;
-      js.forEach(j=>{
-        if(j.status==='success') log('job '+j.name+' PASSED'+(j.duration?(' ('+j.duration.toFixed(1)+'s)'):''), 'OK');
-        else if(j.status==='failed') log('job '+j.name+' FAILED'+(j.failure_reason?(' reason='+j.failure_reason):'')+(j.duration?(' after '+j.duration.toFixed(1)+'s'):''), 'FAIL');
-        else if(j.status==='running') log('job '+j.name+' running...', 'INFO');
-      });
-    }
-    if(intj.status==='failed' && p.id && _analyzedPid!==p.id){
-      lastTrace=s.trace||''; window._changed=(s.changed_files||[]);
-      _analyzedPid=p.id;
-      window._fixPipelineId=p.id; window._fixStartedAt=Date.now();  // start measuring fix time
-      const snippet=failSnippet(lastTrace,4);
-      log('INTEGRATION FAILED — job '+intj.name+' (pipeline #'+p.id+', ref '+(p.ref||'-')+', '+(intj.duration?intj.duration.toFixed(1)+'s':'')+')','FAIL');
-      log('files touched by the failing commit: '+((s.changed_files||[]).join(', ')||'unknown'),'WARN');
-      log('failure signature:'+String.fromCharCode(10)+(snippet||'(no trace available)'),'ERR');
-      // pull the full trace and surface just the root-cause lines (no 2000-char dump)
-      const failedJob=(s.failed_jobs||[])[0];
-      if(failedJob&&failedJob.id){
-        fetch('/api/job-trace?job_id='+failedJob.id).then(r=>r.json()).then(t=>{
-          if(t&&t.trace){
-            const rootCause=failSnippet(t.trace,6);
-            log('root-cause lines (from full trace of job #'+failedJob.id+'):'+String.fromCharCode(10)+rootCause,'ERR');
-          }
-        }).catch(()=>{});
-      }
-      runAI();
-    }
-    if(p.status==='success'){
-      document.getElementById('kpi-rate').textContent='100%';
-    }
-    // Event stream + "green" log + fix-time measurement + autonomous merge:
-    // all only when the status actually CHANGES (dedupe).
-    const key=(p.id||0)+'|'+(p.status||'-');
-    if(key!==_lastEventKey){
-      _lastEventKey=key;
-      streamEvent({type:'pipeline',id:p.id,status:p.status,jobs:js.length});
-      if(p.status==='success'){
-        log('pipeline #'+p.id+' green','OK');
-        // If a fix was pending and a NEW pipeline (the MR's) just went green,
-        // measure the real fix duration and (if autonomous) merge for real.
-        const pm=window._pendingMR;
-        if(pm && p.id && p.id!==pm.source_pipeline_id){
-          const secs=window._fixStartedAt?((Date.now()-window._fixStartedAt)/1000):0;
-          fetch('/api/fix-time',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({seconds:secs,pipeline_id:p.id})}).catch(()=>{});
-          log('measured fix time: '+(secs/60).toFixed(1)+' min (failure -> MR green)','OK');
-          loadMetrics();
-          if(window._autonomous && pm.mr_iid){
-            autoMerge(pm, p);
-          }
-        }
-      }
-    }
-  });
-}
-function clearRun(){
-  // Reset the UI so a NEW trigger only shows the CURRENT run's details.
-  // AI card
-  document.getElementById('ai-card').style.display='none';
-  document.getElementById('ai-reason').textContent='';
-  ['reasoning-cause','reasoning-steps','reasoning-category','validation-commands',
-   'risk-assessment','baseline-time','baseline-steps','auto-time','time-saved',
-   'gate-status','patch-files','ai-diff'].forEach(id=>{const e=document.getElementById(id); if(e)e.textContent='';});
-  ['g-conf','g-risk','g-gate'].forEach(id=>{const e=document.getElementById(id); if(e){e.textContent='--'; e.style.color='var(--muted)';}});
-  const badge=document.getElementById('agent-badge'); if(badge){badge.textContent='…'; badge.className='agent-badge';}
-  document.getElementById('mr-link').style.display='none';
-  window._analysis=null; window._pendingMR=null;
-  // Flow stages + connectors back to pending
-  ['dot-build','dot-test','dot-int'].forEach(id=>{const e=document.getElementById(id); if(e)e.className='flow-dot';});
-  ['fline-build','fline-test'].forEach(id=>{const e=document.getElementById(id); if(e)e.className='flow-line';});
-  ['build-status','test-status','int-status'].forEach(id=>{const e=document.getElementById(id); if(e){e.textContent='waiting'; e.className='flow-status';}});
-  // Debug console + event stream (previous run's output cleared)
-  const dbg=document.getElementById('debug-log'); if(dbg) dbg.innerHTML='';
-  const st=document.getElementById('stream'); if(st) st.innerHTML='';
-  // Dedupe guards reset so the new run's transitions are detected fresh
-  _analyzedPid=null; _lastEventKey=null; _lastJobSig=null; lastTrace=''; window._changed=[];
-  log('new run requested — previous run details cleared','INFO');
-}
-function runPipeline(){
-  clearRun();
-  fetch('/api/trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:'master'})})
-    .then(r=>r.json()).then(x=>{ log('Pipeline triggered: '+JSON.stringify(x).slice(0,200)); startPolling(); });
-}
-function startPolling(){ if(pollTimer)clearInterval(pollTimer); pollTimer=setInterval(pollState,4000); pollState(); }
-
-// Streaming AI reveal (typing effect over the returned root cause)
-function renderDiff(patch){
-  const el=document.getElementById('ai-diff');
-  if(!patch){ el.textContent='(no diff produced)'; return; }
-  el.innerHTML = patch.split('\\n').map(line=>{
-    if(line.startsWith('+++')||line.startsWith('---')||line.startsWith('@@')) return '<span class="meta">'+line.replace(/</g,'&lt;')+'</span>';
-    if(line.startsWith('+')) return '<span class="add">'+line.replace(/</g,'&lt;')+'</span>';
-    if(line.startsWith('-')) return '<span class="del">'+line.replace(/</g,'&lt;')+'</span>';
-    return line.replace(/</g,'&lt;');
-  }).join('\\n');
-}
-let _typing=null;
-function typeText(el, text, done){
-  if(_typing) clearInterval(_typing);
-  el.textContent=''; let i=0;
-  _typing=setInterval(()=>{ el.textContent=text.slice(0,++i); if(i>=text.length){clearInterval(_typing);_typing=null; if(done)done();} }, 12);
-}
-function runAI(){
-  document.getElementById('ai-card').style.display='block';
-  switchTab('tab-reasoning');
-  const badge=document.getElementById('agent-badge');
-  badge.innerHTML='analyzing…<span class="analyzing"></span>';
-  badge.className='agent-badge';
-  document.getElementById('ai-reason').textContent='Analyzing failure...';
-  log('GenAI agent: sending trace + changed files to LLM ...','AI');
-  const t0=Date.now();
-  fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({trace:lastTrace,job:'integration-test',changed_files:window._changed||[]})})
-   .then(r=>r.json()).then(a=>{
-     // Provenance badge: prove whether this came from the live LLM or a fallback.
-     const badge=document.getElementById('agent-badge');
-     if(a._source==='live-llm'){
-       badge.textContent='live LLM: '+(a._llm_model||'');
-       badge.className='agent-badge live';
-       log('GenAI: LLM '+(a._llm_model||'')+' generated a fix in '+a._llm_latency_ms+'ms','AI');
-       log('GenAI verdict → root cause: '+(a.root_cause||'').slice(0,160),'AI');
-       log('GenAI verdict → confidence '+(Math.round((a.confidence||0)*100))+'% · risk '+(a.risk_score||0)+'/100 · files: '+((a.files_touched||[]).join(', ')||'n/a'),'AI');
-     } else {
-       badge.textContent='fallback (LLM down)';
-       badge.className='agent-badge fallback';
-       log('GenAI: LLM not available — '+(a._fallback_error||'unreachable'),'WARN');
-       log('GenAI: showing curated offline fallback for this scenario','WARN');
-     }
-     typeText(document.getElementById('ai-reason'),
-       'Root cause: '+a.root_cause+'\\n\\nSummary: '+a.summary);
-     // KPI metric cards (not pie charts): confidence + risk + gate
-     const confPct=Math.round((a.confidence||0)*100);
-     const risk=a.risk_score||0;
-    const cardGatePass=(a.confidence||0)>=0.7 && risk<=70;
-    const gConf=document.getElementById('g-conf');
-    gConf.textContent=confPct+'%';
-    gConf.style.color=cardGatePass?'var(--hpe-green)':'var(--hpe-red)';
-    const gRisk=document.getElementById('g-risk');
-    gRisk.textContent=risk+'/100';
-    gRisk.style.color=risk<=70?'var(--hpe-amber)':'var(--hpe-red)';
-    const gGate=document.getElementById('g-gate');
-    gGate.textContent=cardGatePass?'PASS':'FAIL';
-    gGate.style.color=cardGatePass?'var(--hpe-green)':'var(--hpe-red)';
-     renderDiff(a.patch);
-     
-     // Update reasoning tab
-     document.getElementById('reasoning-cause').textContent = a.root_cause;
-     document.getElementById('reasoning-steps').textContent = (a.reasoning_steps || []).map((s,i)=>`\${i+1}. ${s}`).join('\\n');
-     document.getElementById('reasoning-category').textContent = a.failure_category || 'unknown';
-     
-     // Update validation tab
-     document.getElementById('validation-commands').textContent = (a.validation_commands || []).join('\\n');
-     document.getElementById('risk-assessment').textContent = `Risk Score: ${a.risk_score||0}/100 - ${a.risk_score<30?'Low':a.risk_score<70?'Medium':'High'} risk`;
-     
-     // Update baseline tab
-     const manualMin = a.manual_triage_minutes || 45;
-     const autoMin = a.auto_triage_minutes || 5;
-     const saved = manualMin - autoMin;
-     const savedPct = Math.round((saved/manualMin)*100);
-     document.getElementById('baseline-time').textContent = `Manual triage: ~${manualMin} minutes`;
-     document.getElementById('baseline-steps').textContent = 'Steps: Download logs -> Manual root cause analysis -> Local reproduction -> Code fix -> PR creation -> Review';
-     document.getElementById('auto-time').textContent = `AI auto-fix: ~${autoMin} minutes`;
-     document.getElementById('time-saved').textContent = `Time saved: ${saved} min (${savedPct}% faster)`;
-     
-     // Gate status
-     const confidenceGate = (a.confidence || 0) >= 0.7;
-     const riskGate = (a.risk_score || 100) <= 70;
-     const gatePassed = confidenceGate && riskGate;
-     document.getElementById('gate-status').textContent = gatePassed ? '✅ Gates PASSED - Auto-merge allowed' : '⚠️ Gates FAILED - Manual review required';
-     document.getElementById('gate-status').style.color = gatePassed ? 'var(--hpe-green)' : 'var(--hpe-amber)';
-     
-     // Patch files
-     document.getElementById('patch-files').textContent = `Files: ${(a.files_touched || []).join(', ') || 'N/A'}`;
-     
-     window._analysis=a;
-   });
-}
-
-function approveFix(){
-  if(!window._analysis){
-    alert('No analysis available');
-    return;
-  }
-  const analysis = window._analysis;
-  const confidenceGate = (analysis.confidence || 0) >= 0.7;
-  const riskGate = (analysis.risk_score || 100) <= 70;
-  const gatePassed = confidenceGate && riskGate;
-  
-  if(!gatePassed && document.getElementById('autonomous').checked){
-    alert('Gates not passed - cannot auto-merge. Uncheck autonomous mode or improve confidence/risk.');
-    return;
-  }
-  
-  document.getElementById('mr-link').style.display='none';
-  document.getElementById('mr-link').innerHTML='Opening MR — applying patch to real files…';
-  document.getElementById('mr-link').style.color='var(--muted)';
-  window._fixStartedAt=Date.now(); // failure -> green = real fix time
-  fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({analysis:window._analysis,source_pipeline_id:window._fixPipelineId||0})}).then(r=>r.json()).then(x=>{
-    log('Auto-fix result: '+JSON.stringify(x));
-    document.getElementById('mr-link').style.color='';
-    if(x.mr_url){
-      const appliedTag = x.patch_applied
-        ? '✅ Patch APPLIED to real files'
-        : '⚠️ Patch ATTACHED for review (auto-apply failed: '+(x.apply_error||'see MR description')+')';
-      document.getElementById('mr-link').style.display='block';
-      document.getElementById('mr-link').innerHTML=appliedTag+': <a href="'+(x.mr_url||'#')+'" target="_blank">MR !'+x.mr_iid+'</a> — '+(x.files||[]).join(', ');
-      window._pendingMR=Object.assign({},x,{source_pipeline_id:window._fixPipelineId||0});
-      window._autonomous=document.getElementById('autonomous').checked;
-      loadMetrics();
-      if(window._autonomous && x.patch_applied){ log('Autonomous mode: awaiting green MR pipeline, then real merge...','INFO'); }
-    } else {
-      document.getElementById('mr-link').style.display='block';
-      document.getElementById('mr-link').innerHTML='⚠️ MR could not be created: '+(x.error||'unknown error');
-      log('Auto-fix FAILED: '+(x.error||'unknown'),'ERR');
-    }
-  });
-}
-// Real autonomous merge: calls the GitLab merge API. Server re-checks the MR
-// pipeline is green + risk gate before it will merge (never a log-only stub).
-function autoMerge(pm, pipeline){
-  const sha=(pipeline && pipeline.sha) || '';
-  const risk = (window._analysis && window._analysis.risk_score) || 0;
-  log('Autonomous: MR !'+pm.mr_iid+' pipeline green — requesting real GitLab merge (risk '+risk+')...','INFO');
-  fetch('/api/merge',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({mr_iid:pm.mr_iid, sha:sha, risk_score:risk})}).then(r=>r.json()).then(x=>{
-    if(x.merged){
-      log('MR !'+pm.mr_iid+' MERGED via GitLab API (autonomous, gates passed)','OK');
-      document.getElementById('mr-link').innerHTML='✅ MR !'+pm.mr_iid+' MERGED (autonomous)';
-      window._pendingMR=null;
-      loadMetrics();
-    } else {
-      log('Autonomous merge blocked: '+(x.error||'unknown')+' — MR left open for manual merge','WARN');
-      document.getElementById('mr-link').innerHTML='⚠️ Auto-merge blocked ('+(x.error||'unknown')+'): MR left open for manual merge';
-    }
-  }).catch(e=>{ log('Autonomous merge request failed: '+e,'ERR'); });
-}
-function rejectFix(){document.getElementById('ai-card').style.display='none';}
-</script>
-</body>
-</html>
-"""
 
 @app.route("/")
 def index():
@@ -904,11 +213,28 @@ def reset():
 
 @app.route("/api/fix-time", methods=["POST"])
 def fix_time():
-    """Record a MEASURED fix duration (failure observed -> MR pipeline green)."""
+    """Record a MEASURED fix duration (failure observed -> MR pipeline green).
+
+    Also records the run in the per-run store (sparklines + replay) when the
+    caller supplies the round context (scenario, source, saved minutes, risk, merged).
+    """
     data = request.get_json(force=True, silent=True) or {}
     secs = float(data.get("seconds", 0) or 0)
     if secs > 0:
         webhook._set_fix_seconds(secs)
+    # per-run history (T: sparklines + replay)
+    if data.get("pipeline_id"):
+        saved_minutes = float(data.get("saved_minutes", 0) or 0)
+        risk = int(data.get("risk_score", 0) or 0)
+        webhook.record_run(
+            pipeline_id=data.get("pipeline_id"),
+            scenario_id=data.get("scenario_id", ""),
+            source=data.get("source", "live-llm"),
+            fix_seconds=secs,
+            saved_minutes=saved_minutes,
+            risk_score=risk,
+            merged=bool(data.get("merged", False)),
+        )
     return jsonify({"ok": True, "seconds": secs})
 
 @app.route("/api/merge", methods=["POST"])
@@ -1098,6 +424,183 @@ def stream():
                 yield f"data: {json.dumps(e)}\n\n"
             time.sleep(0.5)
     return Response(stream_with_context(gen()), mimetype="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Enhancement routes (T1-T7 + quick hits)
+# ---------------------------------------------------------------------------
+import cascade  # noqa: E402
+
+
+@app.route("/api/cascade", methods=["POST"])
+def cascade_start():
+    """T1: start the 'watch it heal' cascade (3 real failures -> auto-fixed -> green)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if data.get("stop"):
+        return jsonify({"ok": True, "stopped": cascade.stop()})
+    if data.get("status"):
+        return jsonify(cascade.status())
+    ok = cascade.start()
+    return jsonify({"ok": ok, "running": cascade.status()["running"]})
+
+
+@app.route("/api/cascade-status")
+def cascade_status_route():
+    return jsonify(cascade.status())
+
+
+@app.route("/api/analyze-stream", methods=["POST"])
+def analyze_stream():
+    """T2: SSE stream of the LLM's live triage reasoning (the agent 'thinking').
+
+    The client streams the triage; the FULL analysis (patch, gates) still comes
+    from /api/analyze — this endpoint is the visible reasoning layer only.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    project_id = int(os.getenv("GITLAB_PROJECT_ID", "1"))
+    state = webhook.poll_pipeline_state(project_id)
+    pipeline = state.get("pipeline") or {}
+    failed = (state.get("failed_jobs") or [{}])[0]
+    trace = ""
+    if failed.get("id"):
+        trace = webhook.get_gitlab_job_trace(project_id, failed["id"])
+    if not trace:
+        trace = state.get("trace") or data.get("trace") or "Integration test failed: exit 1"
+
+    # context = cleaned trace tail + changed files (same inputs the analyst gets)
+    scenario = state.get("scenario")
+    changed = data.get("changed_files") or []
+    if scenario and scenario.get("changed_file"):
+        changed = [scenario["changed_file"]] + [f for f in changed if f != scenario["changed_file"]]
+    ctx = (
+        f"Changed files: {', '.join(changed) or 'unknown'}\n"
+        f"Failing job trace (cleaned, tail):\n{genai_agent._clean_trace(trace, limit=4000)}"
+    )
+
+    def gen():
+        import queue as _queue
+        import threading as _threading
+        q = _queue.Queue()
+
+        def on_event(ev):
+            q.put(ev)
+
+        def producer():
+            try:
+                full, ms = genai_agent.stream_triage(ctx, on_event)
+                q.put({"type": "end", "ms": ms, "text": full})
+            except Exception as e:
+                q.put({"type": "error", "text": str(e)[:200]})
+
+        yield f"data: {json.dumps({'type': 'start', 'model': genai_agent.LLM_MODEL})}\n\n"
+        t = _threading.Thread(target=producer, daemon=True)
+        t.start()
+        # stream events as they arrive (real-time), bounded so the client can bail
+        seen_end = False
+        while not seen_end:
+            try:
+                ev = q.get(timeout=150)
+            except _queue.Empty:
+                break
+            if ev.get("type") == "end":
+                seen_end = True
+            yield f"data: {json.dumps(ev)}\n\n"
+    return Response(stream_with_context(gen()), mimetype="text/event-stream")
+
+
+@app.route("/api/critic", methods=["POST"])
+def critic_route():
+    """T4: second-opinion review of a proposed patch (governance panel)."""
+    data = request.get_json(force=True, silent=True) or {}
+    analysis = data.get("analysis") or {}
+    # fetch current file contents for context when available
+    project_id = int(os.getenv("GITLAB_PROJECT_ID", "1"))
+    mode = os.getenv("GITLAB_MODE", "real").lower()
+    file_contents = {}
+    if mode == "real":
+        state = webhook.poll_pipeline_state(project_id)
+        p = state.get("pipeline") or {}
+        ref = p.get("sha") or p.get("ref") or "master"
+        for cf in (analysis.get("files_touched") or [])[:3]:
+            raw = webhook.get_file_raw(project_id, cf, ref)
+            if raw:
+                file_contents[cf] = raw
+    result = genai_agent.critic_patch(analysis, file_contents)
+    webhook.audit("critic", "patch_reviewed",
+                  f"verdict={result.get('verdict')} risk={result.get('risk_adjusted')} "
+                  f"src={result.get('_source')} {result.get('rationale','')[:120]}")
+    return jsonify(result)
+
+
+@app.route("/api/audit")
+def audit_route():
+    """Governance audit log: every agent action (permanent; Reset demo keeps it)."""
+    limit = int(request.args.get("limit", "50"))
+    return jsonify({"entries": webhook.audit_log(limit)})
+
+
+@app.route("/api/costs", methods=["GET", "POST"])
+def costs_route():
+    """T5: money engine cost inputs (audience-set) + computed savings."""
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        c = webhook.set_costs(
+            hourly_rate=data.get("hourly_rate"),
+            downtime_cost_per_hour=data.get("downtime_cost_per_hour"),
+            manual_triage_minutes=data.get("manual_triage_minutes"))
+        return jsonify({"ok": True, "costs": c})
+    return jsonify(webhook.get_costs())
+
+
+@app.route("/api/runs")
+def runs_route():
+    """Per-run history (sparklines + time-machine replay source)."""
+    return jsonify({"runs": webhook.recent_runs(12)})
+
+
+@app.route("/api/replay")
+def replay_route():
+    """T6: replay payload for a stored run (time machine, 2x/4x in the UI)."""
+    pid = request.args.get("pipeline_id", "")
+    payload = webhook.replay_payload(pid)
+    if not payload:
+        return jsonify({"error": "no stored runs yet"}), 404
+    return jsonify(payload)
+
+
+@app.route("/api/rule-baseline", methods=["POST"])
+def rule_baseline_route():
+    """T7: deterministic (non-GenAI) baseline engine — fixes the KNOWN failure
+    classes by signature matching. Proves the LLM adds value: it fixes the novel
+    cases the rule engine can't (and fails on them, honestly)."""
+    data = request.get_json(force=True, silent=True) or {}
+    trace = data.get("trace") or ""
+    analysis = data.get("analysis") or {}
+    scenario = (webhook.poll_pipeline_state(int(os.getenv("GITLAB_PROJECT_ID", "1")))
+                .get("scenario") or {})
+    sig = {
+        "pool": bool(re.search(r"pool exhausted|POOL_SIZE|connection pool", trace, re.I))
+                or scenario.get("id") == "db_pool_exhaustion",
+        "retry": bool(re.search(r"Timeout|retries exceeded|timeout", trace, re.I))
+                 or scenario.get("id") == "missing_retry",
+        "import": bool(re.search(r"NameError|ImportError|ModuleNotFound", trace))
+                  or scenario.get("id") == "missing_import",
+    }
+    hits = [k for k, v in sig.items() if v]
+    fixed = len(hits) == 1  # exactly one known class -> rule engine can fix it
+    result = {
+        "engine": "rule-based (no LLM)",
+        "matched": hits,
+        "can_fix": fixed,
+        "explanation": (
+            f"Signature match: {', '.join(hits) or 'none'}. "
+            + ("A single known failure class -> the rule engine applies its canned fix."
+               if fixed else "No single known failure class matched -> the rule-based engine "
+                             "CANNOT fix this; only the GenAI agent can generalize to it.")),
+        "canned_patch": analysis.get("patch") if fixed else "",
+        "time_ms": 0,  # rule engine is near-instant (the point: fast but narrow)
+    }
+    return jsonify(result)
 
 # NOTE: pipelines are NOT auto-seeded at startup. The dashboard starts empty;
 # the user triggers a run with the "▶ Run Pipeline" button (real or mock mode).

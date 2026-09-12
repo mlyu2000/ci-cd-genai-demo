@@ -190,3 +190,127 @@ def analyze_failure(job_trace: str, changed_files: list, commit_msg: str = "",
 
 def suggest_mr_title(analysis: dict) -> str:
     return f"fix: {analysis.get('summary', 'auto-fix CI failure')[:60]}"
+
+
+# ---------------------------------------------------------------------------
+# T2: live reasoning stream (SSE). The LLM generates step-by-step triage notes
+# (stream=true); each delta is forwarded as an SSE event in real time, so the
+# UI can render the agent "thinking" live instead of a 6s black box.
+# ---------------------------------------------------------------------------
+TRIAGE_STREAM_PROMPT = (
+    "You are a CI/CD reliability engineer triaging a failing pipeline. "
+    "Walk through your diagnosis OUT LOUD as a short stream of plain-text steps "
+    "(3-7 steps, one per line, no markdown, no JSON): first what you look for in "
+    "the trace, then what you find (quote the key error line), then which file and "
+    "line it points to, then your hypothesis and why. Keep each step under 120 chars."
+)
+
+
+def stream_triage(user_context: str, on_event):
+    """Stream the model's triage reasoning via SSE chunks.
+
+    on_event(event_dict) is called per delta: {type: 'token'|'reasoning'|'done'|'error', text}.
+    Returns (full_text, elapsed_ms). Never raises: errors become an on_event error.
+    """
+    import json as _json
+    t0 = time.time()
+    full = []
+    try:
+        payload = {
+            "model": LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": TRIAGE_STREAM_PROMPT},
+                {"role": "user", "content": user_context},
+            ],
+            "temperature": 0.3,
+            "stream": True,
+        }
+        headers = {"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"}
+        url = f"{LLM_ENDPOINT}/chat/completions"
+        with requests.post(url, json=payload, headers=headers, stream=True,
+                           timeout=120, verify=SSL_CA_CERT or True) as r:
+            if r.status_code >= 400:
+                on_event({"type": "error", "text": f"LLM HTTP {r.status_code}: {r.text[:150]}"})
+                return "", int((time.time() - t0) * 1000)
+            for raw in r.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8", "replace")
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = _json.loads(data)
+                except Exception:
+                    continue
+                try:
+                    delta = chunk["choices"][0].get("delta", {})
+                except Exception:
+                    continue
+                piece = delta.get("content") or delta.get("reasoning_content") or ""
+                if piece:
+                    full.append(piece)
+                    on_event({"type": "token", "text": piece})
+        on_event({"type": "done", "text": "".join(full)})
+        return "".join(full), int((time.time() - t0) * 1000)
+    except Exception as e:
+        on_event({"type": "error", "text": _humanize_llm_error(e)})
+        return "".join(full), int((time.time() - t0) * 1000)
+
+
+# ---------------------------------------------------------------------------
+# T4: patch critic — a second LLM pass reviews the proposed patch before it is
+# applied. Produces a visible second opinion (PASS/REJECT + rationale) that the
+# governance panel shows next to the risk gates.
+# ---------------------------------------------------------------------------
+CRITIC_PROMPT = (
+    "You are a strict code-review agent auditing a proposed auto-fix patch for a "
+    "CI/CD failure. Judge ONLY the patch's safety and correctness. Respond ONLY with strict JSON: "
+    '{"verdict": "PASS" | "REJECT", "risk_adjusted": 0-100, '
+    '"blast_radius": "one-line description of what the patch can affect", '
+    '"concerns": ["concern 1", ...], "rationale": "two-sentence justification"}'
+)
+
+
+def critic_patch(analysis: dict, file_contents: dict = None) -> dict:
+    """Second opinion on a proposed patch. Never raises; returns a safe default
+    (PASS, low risk) on LLM failure so a critic outage can't block the demo —
+    labeled _source so the UI shows why."""
+    patch = analysis.get("patch") or ""
+    files = analysis.get("files_touched") or []
+    ctx_parts = [f"Root cause (analyst): {analysis.get('root_cause', '')}",
+                 f"Files touched: {', '.join(files) or 'n/a'}",
+                 f"Proposed patch:\n{patch[:4000] or '(empty — analyst produced no patch)'}"]
+    if file_contents:
+        for p, c in list(file_contents.items())[:3]:
+            ctx_parts.append(f"--- current {p} ---\n{(c or '')[:2000]}")
+    user_msg = "\n\n".join(ctx_parts)
+    t0 = time.time()
+    try:
+        result = _call_llm(CRITIC_PROMPT + "\n" + user_msg)
+        verdict = str(result.get("verdict", "PASS")).upper()
+        if verdict not in ("PASS", "REJECT"):
+            verdict = "PASS"
+        out = {
+            "verdict": verdict,
+            "risk_adjusted": int(result.get("risk_adjusted", analysis.get("risk_score", 20)) or 20),
+            "blast_radius": str(result.get("blast_radius", "n/a"))[:200],
+            "concerns": [str(c)[:160] for c in (result.get("concerns") or [])[:5]],
+            "rationale": str(result.get("rationale", ""))[:400],
+            "_source": "live-llm", "_llm_model": LLM_MODEL,
+            "_llm_latency_ms": int((time.time() - t0) * 1000),
+        }
+        return out
+    except Exception as e:
+        # Critic unavailable: don't block the fix, but say so honestly.
+        return {
+            "verdict": "PASS",
+            "risk_adjusted": int(analysis.get("risk_score", 20) or 20),
+            "blast_radius": "n/a (critic unavailable)",
+            "concerns": [f"critic LLM unavailable: {_humanize_llm_error(e)}"],
+            "rationale": "Second-opinion pass skipped (LLM unreachable); analyst gates still apply.",
+            "_source": "offline-fallback", "_llm_model": LLM_MODEL,
+            "_llm_latency_ms": int((time.time() - t0) * 1000),
+        }
