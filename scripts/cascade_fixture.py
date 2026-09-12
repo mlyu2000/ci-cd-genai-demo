@@ -139,6 +139,27 @@ def _git(args):
                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
 
 
+def _original_owners(paths):
+    """Capture (uid, gid) for each existing file so we can restore ownership after
+    a root run (the demo container runs git as root, which re-owns touched files)."""
+    owners = {}
+    for p in paths:
+        try:
+            st = os.stat(p)
+            owners[p] = (st.st_uid, st.st_gid)
+        except Exception:
+            pass
+    return owners
+
+
+def _restore_owners(owners):
+    for p, (uid, gid) in owners.items():
+        try:
+            os.chown(p, uid, gid)
+        except Exception:
+            pass
+
+
 def _set_pool(values):
     with open(POOL) as f:
         content = f.read()
@@ -199,6 +220,7 @@ def apply(state: str) -> int:
     if dirty:
         _git(["stash", "pop"])
 
+    owners = _original_owners([POOL, CLIENT, SERVICE])
     _set_pool(pool_vals)
     c1 = _write_if_differs(CLIENT, client_src)
     c2 = _write_if_differs(SERVICE, service_src)
@@ -212,6 +234,10 @@ def apply(state: str) -> int:
     if p.returncode != 0:
         print("push failed:", p.stderr)
         return 1
+    # When run as root (inside the demo container), git commit/push re-owns the
+    # touched files to root, which breaks the ml-user's local git + later switches.
+    # Restore each file's original owner captured before we wrote it.
+    _restore_owners(owners)
     print(f"fixture switched to {state}: {LABELS[state]} (pushed to {remote})")
     return 0
 
