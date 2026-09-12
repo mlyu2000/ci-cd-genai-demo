@@ -114,25 +114,33 @@ def _analyze_for_round(state, scenario_key):
     file_contents, changed_files, git_diff = {}, [], ""
     if mode == "real":
         ref = p.get("sha") or p.get("ref") or "master"
-        m = re.search(r"pytest\s+(-q\s+)?([\w./_\-]+)", trace)
-        cand = [m.group(2)] if m else []
-        # the fixture commit's changed files carry the failing source
+        # Source = the NON-TEST file(s) in the fixture commit (the real code to
+        # patch). Test files are the symptom; the source is the cause.
+        src_files = []
         if p.get("sha"):
-            d = webhook.get_commit_diff(pid, p["sha"])
-            git_diff = d
-            for line in d.splitlines():
+            git_diff = webhook.get_commit_diff(pid, p["sha"])
+            for line in git_diff.splitlines():
                 mm = re.match(r"diff --git a/(\S+) b/", line)
                 if mm:
-                    cand.append(mm.group(1))
-        seen = set()
-        for cf in cand[:6]:
-            if cf in seen:
-                continue
-            seen.add(cf)
-            raw = webhook.get_file_raw(pid, cf, ref)
-            if raw:
-                file_contents[cf] = raw
-                changed_files.append(cf)
+                    path = mm.group(1)
+                    if not (path.startswith("tests/") or "/test_" in path or path.startswith("test_")):
+                        src_files.append(path)
+        if src_files:
+            for cf in src_files[:4]:
+                raw = webhook.get_file_raw(pid, cf, ref)
+                if raw:
+                    file_contents[cf] = raw
+                    if cf not in changed_files:
+                        changed_files.append(cf)
+        else:
+            # fallback: the pytest target file from the trace
+            m = re.search(r"pytest\s+(-q\s+)?([\w./_\-]+)", trace)
+            if m:
+                changed_files.append(m.group(2))
+                raw = webhook.get_file_raw(pid, m.group(2), ref)
+                if raw:
+                    file_contents[m.group(2)] = raw
+
     elif scenario:
         cf = scenario.get("changed_file")
         if cf:
