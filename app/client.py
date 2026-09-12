@@ -1,17 +1,21 @@
 """External HTTP client for the payments service.
 
 The integration test (tests/integration/test_client.py) exercises this against
-a simulated endpoint whose first attempt times out (>2s). Without a retry
-wrapper the timeout propagates and the job fails (fixture state for scenario
-`missing_retry`). The GenAI agent's fix is to add a retry decorator.
+a simulated endpoint whose FIRST attempt times out (>2s). With the retry
+wrapper below, the second attempt succeeds and the job is green. WITHOUT the
+retried path (fixture state for scenario `missing_retry`) the timeout
+propagates and the integration job fails. The GenAI agent's fix for that
+scenario is to add the retry decorator (see scenario `missing_retry`).
 """
 import time
 
 import requests
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
 def fetch(url: str, timeout: float = 2.0) -> dict:
-    """GET a JSON endpoint. No retry yet (that is the bug the agent fixes)."""
+    """GET a JSON endpoint, retrying transient timeouts (3 attempts, 1s backoff)."""
     resp = requests.get(url, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
