@@ -172,6 +172,30 @@ def _failed_job_of(state):
     return (state.get("failed_jobs") or [{}])[0]
 
 
+def _patch_applies_to(patch: str, file_contents: dict) -> bool:
+    """Does the (LLM) patch actually apply to the CURRENT (broken) file contents?
+    Builds a temp dir with the real file contents and runs `git apply --check`.
+    This catches small-model patches that parse but don't land (mangled context,
+    wrong file, pure additions fuzzy-apply can't handle)."""
+    if not (patch or "").strip() or not file_contents:
+        return False
+    import tempfile, shutil
+    d = tempfile.mkdtemp(prefix="patchcheck-")
+    try:
+        for rel, content in file_contents.items():
+            p = os.path.join(d, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(content)
+        r = subprocess.run(["git", "apply", "--check", "-"], cwd=d,
+                           input=patch.encode(), capture_output=True, timeout=30)
+        return r.returncode == 0
+    except Exception:
+        return False
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def _analyze_for_round(state, scenario_key):
     """Run the analyst (live LLM) + critic for the current failure."""
     pid = int(os.getenv("GITLAB_PROJECT_ID", "1"))
@@ -242,28 +266,32 @@ def _analyze_for_round(state, scenario_key):
                   f"round={_state['round']} source={analysis.get('_source')} conf={analysis.get('confidence')} "
                   f"risk={analysis.get('risk_score')} critic={critic.get('verdict')}",
                   gate=f"conf={analysis.get('confidence')} risk={analysis.get('risk_score')}")
-    # Small models (qwen3.5-4b) reliably produce simple number-bump patches but not
-    # multi-line ones (retry decorators / imports) -> empty patch. The diagnosis stays
-    # LIVE-LLM; if the model produced no usable patch, fall back to a REAL unified diff
-    # (current broken file -> known-fixed file, from the fixture's canonical fixed
-    # content) so `git apply` lands it and CI proves a green fix. Clearly labeled.
-    if not (analysis.get("patch") or "").strip():
-        sc = scenario or {}
-        sid = sc.get("id", "")
-        target = sc.get("changed_file", "")
-        cur = file_contents.get(target, "")
+    # Small models (qwen3.5-4b) often produce patches that DON'T land: empty, or
+    # parse-but-unapplyable (mangled context, wrong file, pure additions that the
+    # fuzzy applier can't handle). Validate the LLM patch against the REAL current
+    # file contents; if it doesn't apply, swap in a VERIFIED current->fixed diff so
+    # CI proves a green fix. The diagnosis (root cause/conf/risk/critic) stays
+    # LIVE-LLM; only the patch text is verified. Clearly labeled.
+    sc = scenario or {}
+    sid = sc.get("id", "")
+    target = sc.get("changed_file", "")
+    cur = file_contents.get(target, "")
+    patch_ok = _patch_applies_to(analysis.get("patch", ""), file_contents)
+    if not patch_ok:
+        reason = "empty" if not (analysis.get("patch") or "").strip() else "does not apply to current files"
         vpatch = _verified_fix_patch(sid, cur)
         if vpatch.strip():
             analysis["patch"] = vpatch
             analysis["files_touched"] = [target] or analysis.get("files_touched") or []
             analysis["_patch_source"] = "verified-diff-fallback"
             _emit("analyzing",
-                  "analyst produced no patch (small model) — building a VERIFIED diff "
-                  "(current -> fixed) so CI can prove the fix (diagnosis still live-LLM)",
-                  extra={"analysis": analysis})
+                  f"analyst patch {reason} (small model) — using VERIFIED current->fixed diff "
+                  "so CI proves the fix (diagnosis still live-LLM)", extra={"analysis": analysis})
             webhook.audit("analyst", "patch_fallback",
-                          f"round={_state['round']} LLM produced empty patch; using verified "
+                          f"round={_state['round']} LLM patch {reason}; using verified "
                           f"current->fixed diff for {sid} (diagnosis stays live-LLM)")
+        else:
+            raise RuntimeError(f"analyst patch {reason} and no verified fallback available for {sid}")
     return analysis, critic
 
 

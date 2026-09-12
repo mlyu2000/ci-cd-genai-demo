@@ -33,3 +33,12 @@ def test_verified_patch_none_when_already_fixed():
 
 def test_verified_patch_unknown_scenario():
     assert cascade._verified_fix_patch("nonexistent", "x") == ""
+
+
+def test_patch_applies_to_catches_bad_llm_patch():
+    import cascade_fixture as cf
+    fc = {"app/client.py": cf.CLIENT_BROKEN}
+    bad = ("--- a/app/client.py\n+++ b/app/client.py\n@@ -1,3 +1,3 @@\n"
+           "-not-a-real-context-line\n+from tenacity import retry\n")
+    assert cascade._patch_applies_to(bad, fc) is False
+    assert cascade._patch_applies_to(cascade._verified_fix_patch("missing_retry", cf.CLIENT_BROKEN), fc) is True
