@@ -1,9 +1,4 @@
-"""User service for the payments app.
-
-Fixture state for scenario `missing_import`: `Optional` is used in a signature
-but NOT imported from typing, so importing this module raises NameError. The
-GenAI agent's fix is to add the missing import (one-line patch).
-"""
+"""User service for the payments app."""
 from typing import Dict, Optional
 
 
